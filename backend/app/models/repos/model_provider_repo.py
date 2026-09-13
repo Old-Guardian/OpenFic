@@ -52,6 +52,8 @@ async def create(
     api_key_encrypted: str,
     provider_type: str,
     custom_headers_encrypted: str = "",
+    provider_config: dict[str, Any] | None = None,
+    credentials_encrypted: str = "",
 ) -> ModelProvider:
     """
     创建提供商。
@@ -63,6 +65,8 @@ async def create(
         api_key_encrypted: 加密后的 API Key。
         custom_headers_encrypted: 加密后的自定义请求头。
         provider_type: 提供商类型。
+        provider_config: 非敏感配置（Vertex 使用）。
+        credentials_encrypted: 加密后的 Vertex Service Account JSON。
     Returns:
         创建的提供商实例。
     """
@@ -72,6 +76,8 @@ async def create(
         api_key_encrypted=api_key_encrypted,
         custom_headers_encrypted=custom_headers_encrypted,
         provider_type=provider_type,
+        provider_config=provider_config or {},
+        credentials_encrypted=credentials_encrypted,
     )
     session.add(provider)
     await session.flush()
@@ -87,6 +93,8 @@ async def update(
     api_key_encrypted: str | None = None,
     custom_headers_encrypted: str | None = None,
     provider_type: str | None = None,
+    provider_config: dict[str, Any] | None = None,
+    credentials_encrypted: str | None = None,
 ) -> ModelProvider | None:
     """
     更新提供商。
@@ -99,6 +107,9 @@ async def update(
         api_key_encrypted: 加密后的 API Key。
         custom_headers_encrypted: 加密后的自定义请求头。
         provider_type: 提供商类型。
+        provider_config: 非敏感配置（Vertex 使用），None 表示保留原值。
+        credentials_encrypted: 加密后的 Vertex Service Account JSON，
+            None 表示保留原值。
     Returns:
         更新后的提供商实例，如果不存在则返回 None。
     """
@@ -116,6 +127,10 @@ async def update(
         provider.custom_headers_encrypted = custom_headers_encrypted
     if provider_type is not None:
         provider.provider_type = provider_type
+    if provider_config is not None:
+        provider.provider_config = provider_config
+    if credentials_encrypted is not None:
+        provider.credentials_encrypted = credentials_encrypted
     provider.updated_at = datetime.now(UTC)
     session.add(provider)
     await session.flush()

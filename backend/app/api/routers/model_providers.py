@@ -96,6 +96,8 @@ async def _build_provider_response(
         name=provider.name,
         url=provider.url,
         provider_type=provider.provider_type,
+        provider_config=service.get_provider_config_payload(provider),
+        has_credentials=bool(provider.credentials_encrypted),
         custom_header_names=service.get_custom_header_names(provider),
         supported_task_types=supported_task_types,
         icon_path=icon_path,
@@ -171,11 +173,16 @@ async def get_provider(
     summary="创建提供商",
 )
 async def create_provider(
-    url: Annotated[str, Form()],
     provider_type: Annotated[str, Form()],
     name: Annotated[str, Form()] = "",
+    # 允许为空：Vertex 连接不配置服务 URL（FastAPI 会把空表单值视为缺失，
+    # 因此不能依赖 Form 的必填校验；非 Vertex 的 URL 必填由 service 层执行）。
+    url: Annotated[str, Form()] = "",
     api_key: Annotated[str | None, Form()] = None,
     custom_headers: Annotated[str | None, Form()] = None,
+    provider_config: Annotated[str | None, Form()] = None,
+    credentials_action: Annotated[str, Form()] = "keep",
+    service_account_json: Annotated[str | None, Form()] = None,
     session: AsyncSession = Depends(get_session),
     service: ModelProviderService = Depends(get_provider_service),
 ) -> ModelProviderResponse:
@@ -187,6 +194,9 @@ async def create_provider(
         url: 服务 URL。
         api_key: API Key。
         provider_type: 提供商类型。
+        provider_config: Vertex 非敏感配置（JSON 字符串）。
+        credentials_action: Vertex 凭据操作（keep/replace/clear）。
+        service_account_json: Vertex Service Account JSON（仅 replace 时传入）。
         session: 数据库 session。
         service: 提供商服务。
 
@@ -204,6 +214,9 @@ async def create_provider(
             api_key=api_key or "",
             provider_type=provider_type,
             custom_headers=_parse_custom_headers(custom_headers),
+            provider_config=provider_config,
+            credentials_action=credentials_action,
+            service_account_json=service_account_json,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
@@ -223,6 +236,9 @@ async def update_provider(
     api_key: Annotated[str | None, Form()] = None,
     provider_type: Annotated[str | None, Form()] = None,
     custom_headers: Annotated[str | None, Form()] = None,
+    provider_config: Annotated[str | None, Form()] = None,
+    credentials_action: Annotated[str, Form()] = "keep",
+    service_account_json: Annotated[str | None, Form()] = None,
     session: AsyncSession = Depends(get_session),
     service: ModelProviderService = Depends(get_provider_service),
 ) -> ModelProviderResponse:
@@ -235,6 +251,9 @@ async def update_provider(
         url: 服务 URL。
         api_key: API Key。
         provider_type: 提供商类型。
+        provider_config: Vertex 非敏感配置（JSON 字符串），省略则保留。
+        credentials_action: Vertex 凭据操作（keep/replace/clear）。
+        service_account_json: Vertex Service Account JSON（仅 replace 时传入）。
         session: 数据库 session。
         service: 提供商服务。
 
@@ -256,6 +275,9 @@ async def update_provider(
             api_key=api_key,
             provider_type=provider_type,
             custom_headers=_parse_custom_headers(custom_headers),
+            provider_config=provider_config,
+            credentials_action=credentials_action,
+            service_account_json=service_account_json,
         )
 
         return await _build_provider_response(provider, service)

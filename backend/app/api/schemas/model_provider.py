@@ -29,6 +29,20 @@ class ModelProviderResponse(BaseModel):
     name: str = Field(description="提供商名称/备注")
     url: str = Field(description="服务 URL")
     provider_type: str = Field(description="提供商类型")
+    provider_config: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "非敏感配置（Vertex 为 project_id/location/auth_mode，"
+            "其他提供商为空对象）"
+        ),
+    )
+    has_credentials: bool = Field(
+        default=False,
+        description=(
+            "是否存在已保存的 Vertex Service Account 凭据密文；"
+            "不代表 ADC 可用，也不代表已通过认证"
+        ),
+    )
     custom_header_names: list[str] = Field(
         default_factory=list,
         description="已配置的自定义请求头名称（不返回请求头值）",

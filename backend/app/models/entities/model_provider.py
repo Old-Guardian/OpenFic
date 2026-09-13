@@ -4,8 +4,9 @@ ModelProvider 数据模型。
 """
 
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import Column, Text
+from sqlalchemy import JSON, Column, Text
 from sqlmodel import Field, SQLModel
 
 from app.core.ids import generate_id
@@ -21,6 +22,10 @@ class ModelProvider(SQLModel, table=True):
         url: 服务 URL。
         api_key_encrypted: 加密后的 API Key。
         provider_type: 提供商类型（Anthropic、OpenAI、Deepseek 等）。
+        provider_config: 非敏感配置（Vertex 的 project_id/location/auth_mode；
+            仅允许非敏感字段，凭据与请求头不允许写入）。
+        credentials_encrypted: 加密后的 Vertex Service Account JSON
+            （仅 google-vertex 使用，其他类型恒为空字符串）。
         created_at: 创建时间。
         updated_at: 上次修改时间。
     """
@@ -32,6 +37,14 @@ class ModelProvider(SQLModel, table=True):
     url: str = Field(max_length=500)
     api_key_encrypted: str = Field(max_length=1000)
     custom_headers_encrypted: str = Field(
+        default="",
+        sa_column=Column(Text, nullable=False),
+    )
+    provider_config: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False, default=dict),
+    )
+    credentials_encrypted: str = Field(
         default="",
         sa_column=Column(Text, nullable=False),
     )
