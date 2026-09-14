@@ -366,6 +366,8 @@ async def test_validate_anthropic_compatible_provider_discovers_models(
                 "metadata": None,
             }
         ],
+        "error_code": None,
+        "validation_scope": None,
     }
     assert route.calls[0].request.headers["x-api-key"] == "test-key"
     assert route.calls[0].request.headers["anthropic-version"] == "2023-06-01"
@@ -470,6 +472,8 @@ async def test_validate_gemini_compatible_provider_discovers_llm_models(
                 "metadata": None,
             },
         ],
+        "error_code": None,
+        "validation_scope": None,
     }
     assert "key" not in route.calls[0].request.url.params
     assert route.calls[0].request.headers["x-goog-api-key"] == "test-key"
@@ -516,6 +520,8 @@ async def test_get_anthropic_compatible_provider_models_discovers_models(
                 "metadata": None,
             }
         ],
+        "error_code": None,
+        "validation_scope": None,
     }
 
 

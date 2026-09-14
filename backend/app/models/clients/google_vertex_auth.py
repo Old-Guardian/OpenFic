@@ -41,6 +41,15 @@ VERTEX_ERROR_CREDENTIALS_INVALID = "vertex_credentials_invalid"
 # 未归类到 6.2 节明确错误码的认证域未知异常，便于与已知凭据问题区分。
 VERTEX_ERROR_AUTH_UNKNOWN = "vertex_auth_unknown"
 
+# 第 6.2 节请求层错误码（由 T5 验证接口按响应分类；认证域见上方常量）。
+VERTEX_ERROR_PERMISSION_DENIED = "vertex_permission_denied"
+VERTEX_ERROR_MODEL_UNAVAILABLE = "vertex_model_unavailable"
+VERTEX_ERROR_RATE_LIMITED = "vertex_rate_limited"
+VERTEX_ERROR_TIMEOUT = "vertex_timeout"
+VERTEX_ERROR_RESPONSE_BLOCKED = "vertex_response_blocked"
+# 请求层未归类异常的未知码。
+VERTEX_ERROR_REQUEST_UNKNOWN = "vertex_request_unknown"
+
 
 class VertexAuthError(Exception):
     """Vertex 认证解析失败，message 已脱敏，可直接返回给用户。"""
@@ -188,3 +197,103 @@ def classify_vertex_auth_error(exc: Exception) -> str:
         return VERTEX_ERROR_CREDENTIALS_INVALID
     # 未知异常不冒充已知凭据问题，由调用方决定展示与日志策略。
     return VERTEX_ERROR_AUTH_UNKNOWN
+
+
+# 第 6.2 节请求层错误 → 用户提示方向（脱敏，可直接返回给用户）。
+_VERTEX_REQUEST_ERROR_MESSAGES = {
+    VERTEX_ERROR_PERMISSION_DENIED: "权限不足，请检查项目访问权限、IAM 角色与 Vertex AI API 是否已启用",
+    VERTEX_ERROR_MODEL_UNAVAILABLE: "模型调用失败，请检查模型 ID、区域和访问权限",
+    VERTEX_ERROR_RATE_LIMITED: "请求被限流或超出配额，请稍后重试",
+    VERTEX_ERROR_TIMEOUT: "请求超时，请检查网络或稍后重试",
+    VERTEX_ERROR_RESPONSE_BLOCKED: "响应被拦截或没有返回有效结果",
+    VERTEX_ERROR_REQUEST_UNKNOWN: "模型调用失败，请稍后重试或检查配置",
+}
+
+
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    """收集异常及其 __cause__ 链（防环）。"""
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and current not in chain:
+        chain.append(current)
+        current = current.__cause__
+    return chain
+
+
+def classify_vertex_request_error(exc: Exception) -> tuple[str, str]:
+    """
+    将 Vertex 模型调用阶段的异常映射为第 6.2 节请求层错误码和脱敏消息。
+
+    覆盖最小调用验证（T5）遇到的请求层异常：超时、限流、权限不足、
+    模型不可用，以及请求期 token 刷新失败（凭据无效）。SDK 在此阶段
+    抛出的 HTTP 错误统一为 ClientError/ServerError（经 langchain 包装为
+    ChatGoogleGenerativeAIError，原始 code 保留在异常链上）；凭据构造
+    阶段的错误由 classify_vertex_auth_error 处理，不在本函数职责内。
+
+    Returns:
+        (error_code, message) 元组；message 已脱敏，不含原始异常字符串。
+    """
+    from app.core.errors import LLMTimeoutError
+
+    # 超时：LLMClient / asyncio 超时（含 SDK 的请求超时）。
+    if isinstance(exc, (LLMTimeoutError, TimeoutError)):
+        code = VERTEX_ERROR_TIMEOUT
+        return code, _VERTEX_REQUEST_ERROR_MESSAGES[code]
+
+    chain = _exception_chain(exc)
+
+    # 请求期 token 刷新失败属于凭据问题（不回退到另一认证模式）。
+    if any(isinstance(item, RefreshError) for item in chain):
+        return (
+            VERTEX_ERROR_CREDENTIALS_INVALID,
+            "凭据无效或已过期，请检查认证配置",
+        )
+
+    # 沿异常链提取 google-genai APIError 的 HTTP 状态码。
+    api_error_code = next(
+        (
+            code
+            for item in chain
+            if isinstance(code := getattr(item, "code", None), int)
+        ),
+        None,
+    )
+    if api_error_code is not None:
+        if api_error_code == 401:
+            return (
+                VERTEX_ERROR_CREDENTIALS_INVALID,
+                "凭据无效或已过期，请检查认证配置",
+            )
+        if api_error_code == 403:
+            code = VERTEX_ERROR_PERMISSION_DENIED
+            return code, _VERTEX_REQUEST_ERROR_MESSAGES[code]
+        if api_error_code == 404:
+            code = VERTEX_ERROR_MODEL_UNAVAILABLE
+            return code, _VERTEX_REQUEST_ERROR_MESSAGES[code]
+        if api_error_code == 429:
+            code = VERTEX_ERROR_RATE_LIMITED
+            return code, _VERTEX_REQUEST_ERROR_MESSAGES[code]
+        if 500 <= api_error_code < 600:
+            return (
+                VERTEX_ERROR_REQUEST_UNKNOWN,
+                "模型服务暂时不可用，请稍后重试",
+            )
+        if 400 <= api_error_code < 500 and _vertex_error_indicates_model(exc):
+            code = VERTEX_ERROR_MODEL_UNAVAILABLE
+            return code, _VERTEX_REQUEST_ERROR_MESSAGES[code]
+
+    # 响应被拦截：langchain 对空 candidates 不抛异常而返回空消息，
+    # 由验证服务在检查响应内容时显式分类；此处兜底其余未知异常。
+    code = VERTEX_ERROR_REQUEST_UNKNOWN
+    return code, _VERTEX_REQUEST_ERROR_MESSAGES[code]
+
+
+def _vertex_error_indicates_model(exc: Exception) -> bool:
+    """判断 4xx 错误是否指向模型 ID 不存在（不匹配时归为未知请求错误）。
+
+    SDK 对 "model ... not found" 一类错误通常返回 404（已单独处理）；
+    其余 4xx 场景下仅当消息明确指向模型时归类为模型不可用。消息仅
+    用于分类、不回传给用户，无泄漏风险。
+    """
+    message = str(exc).lower()
+    return any(keyword in message for keyword in ("model", "not found", "unsupported"))

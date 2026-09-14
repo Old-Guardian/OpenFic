@@ -18,9 +18,12 @@ from app.core.errors import NotFoundError
 from app.models.catalog import CatalogMatch, ModelProviderCatalogService
 from app.models.clients.google_vertex_auth import (
     VERTEX_ERROR_CREDENTIALS_INVALID,
+    VERTEX_ERROR_CREDENTIALS_MISSING,
+    VERTEX_ERROR_RESPONSE_BLOCKED,
     VertexAuthError,
     VertexConnectionContext,
     build_vertex_connection_context_async,
+    classify_vertex_request_error,
 )
 from app.models.entities.model_provider import ModelProvider
 from app.models.registry import AdapterRegistry
@@ -28,6 +31,7 @@ from app.models.repos import model_provider_repo
 from app.models.vertex_config import (
     VERTEX_CREDENTIALS_ACTIONS,
     VERTEX_PROVIDER_TYPE,
+    VertexConfigError,
     VertexProviderConfig,
     load_vertex_provider_config,
     parse_vertex_provider_config,
@@ -42,6 +46,15 @@ CUSTOM_PROVIDER_TYPES = frozenset(
         "anthropic-compatible",
         "gemini-compatible",
     }
+)
+
+# Vertex 连接验证（第 6.2 节）：固定短提示词、限制输出、设置请求超时，
+# 不使用用户文稿，不在保存或打开对话框时自动执行。
+_VERTEX_VALIDATION_PROMPT = "Reply with exactly: OK"
+_VERTEX_VALIDATION_MAX_OUTPUT_TOKENS = 16
+_VERTEX_VALIDATION_TIMEOUT_SECONDS = 30
+_VERTEX_RESPONSE_BLOCKED_MESSAGE = (
+    "模型没有返回有效内容，可能被安全策略拦截，无法确认连接可用"
 )
 
 
@@ -120,7 +133,9 @@ class ModelProviderService:
         try:
             payload = json.loads(self.encryption_service.decrypt(encrypted_headers))
         except Exception:
-            logger.warning("Failed to decrypt custom headers for provider {}", provider.id)
+            logger.warning(
+                "Failed to decrypt custom headers for provider {}", provider.id
+            )
             return {}
 
         if not isinstance(payload, dict):
@@ -258,9 +273,13 @@ class ModelProviderService:
 
         # 加密 API Key
         encrypted_key = self.encryption_service.encrypt(api_key) if api_key else ""
-        normalized_headers = self._normalize_custom_headers(provider_type, custom_headers)
+        normalized_headers = self._normalize_custom_headers(
+            provider_type, custom_headers
+        )
         encrypted_headers = (
-            self.encryption_service.encrypt(json.dumps(normalized_headers, ensure_ascii=False))
+            self.encryption_service.encrypt(
+                json.dumps(normalized_headers, ensure_ascii=False)
+            )
             if normalized_headers
             else ""
         )
@@ -325,14 +344,18 @@ class ModelProviderService:
 
         if credentials_action == "replace":
             if service_account_json is None or not service_account_json.strip():
-                raise ValueError("credentials_action=replace 必须提供 service_account_json")
+                raise ValueError(
+                    "credentials_action=replace 必须提供 service_account_json"
+                )
             payload = validate_vertex_service_account_json(service_account_json)
             return self.encryption_service.encrypt(
                 json.dumps(payload, ensure_ascii=False)
             )
 
         if service_account_json is not None and service_account_json.strip():
-            raise ValueError("仅 credentials_action=replace 时可以提供 service_account_json")
+            raise ValueError(
+                "仅 credentials_action=replace 时可以提供 service_account_json"
+            )
         if credentials_action == "clear":
             return ""
         return existing_encrypted
@@ -622,6 +645,197 @@ class ModelProviderService:
                 ) from exc
         return await build_vertex_connection_context_async(config, service_account_json)
 
+    async def validate_vertex_connection(
+        self,
+        session: AsyncSession,
+        *,
+        provider_config: str | None,
+        credentials_action: str,
+        service_account_json: str | None,
+        model_id: str | None,
+        provider_id: str | None,
+    ) -> dict[str, Any]:
+        """
+        对 Vertex 连接执行最小模型调用验证（实施计划第 6.2 节）。
+
+        合并草稿配置与已保存配置、临时凭据与旧凭据（仅用于本次验证，
+        不保存任何修改），复用 T4 模型工厂对用户选定模型发送固定的
+        短提示词。只有收到有效模型响应才视为验证成功；空结果或被拦截
+        的响应按 vertex_response_blocked 分类，不 fallback 成功。
+
+        Args:
+            session: 数据库 session（仅读取 provider_id 对应连接）。
+            provider_config: 草稿配置 JSON；省略时使用已保存配置。
+            credentials_action: 凭据操作（keep/replace/clear），仅语义
+                上与保存请求一致：replace 用临时凭据，clear 忽略旧凭据，
+                keep 沿用已保存凭据。
+            service_account_json: 临时 Service Account JSON（仅 replace）。
+            model_id: 用户选定的测试模型 ID。
+            provider_id: 可选的已保存连接 ID，用于读取旧配置与旧凭据。
+
+        Returns:
+            验证结果字典：success、message、error_code、validation_scope、
+            models（成功时回显测试模型的目录元数据列表）。
+
+        Raises:
+            NotFoundError: provider_id 指定的连接不存在。
+        """
+        # 1. 合并草稿与已保存配置，得到本次验证使用的最终配置。
+        existing: ModelProvider | None = None
+        if provider_id is not None:
+            existing = await model_provider_repo.get_by_id(session, provider_id)
+            if existing is None:
+                raise NotFoundError(f"Provider with id {provider_id} not found")
+            if existing.provider_type != VERTEX_PROVIDER_TYPE:
+                raise VertexConfigError("指定连接不是 Vertex 类型，无法按 Vertex 验证")
+
+        if provider_config is None or not provider_config.strip():
+            if existing is None:
+                raise VertexConfigError(
+                    "Vertex 验证必须提供 provider_config，或通过 provider_id "
+                    "使用已保存的配置"
+                )
+            config = load_vertex_provider_config(
+                self.get_provider_config_payload(existing)
+            )
+        else:
+            config = parse_vertex_provider_config(provider_config)
+
+        if model_id is None or not model_id.strip():
+            raise VertexConfigError("Vertex 验证必须指定测试模型（model_id）")
+        model_id = model_id.strip()
+
+        # 2. 按凭据操作语义合并旧凭据与临时凭据（仅内存，不落库）。
+        resolved_service_account_json = self._resolve_validation_credentials(
+            existing=existing,
+            credentials_action=credentials_action,
+            service_account_json=service_account_json,
+        )
+        self._validate_validation_credentials_final_state(
+            config, resolved_service_account_json
+        )
+
+        # 3. 共享连接解析（T2）：ADC/Service Account → 内存上下文。
+        context = await build_vertex_connection_context_async(
+            config, resolved_service_account_json
+        )
+
+        # 4. 复用 T4 模型工厂发送最小调用。
+        from app.models.clients.llm_client import LLMClient, LLMConfig
+
+        client = LLMClient(
+            LLMConfig(
+                provider_type=VERTEX_PROVIDER_TYPE,
+                base_url="",
+                api_key="",
+                model_id=model_id,
+                max_tokens=_VERTEX_VALIDATION_MAX_OUTPUT_TOKENS,
+                vertex_connection=context,
+                request_timeout=_VERTEX_VALIDATION_TIMEOUT_SECONDS,
+            )
+        )
+        try:
+            response = await client.generate(
+                [{"role": "user", "content": _VERTEX_VALIDATION_PROMPT}],
+                timeout=_VERTEX_VALIDATION_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            error_code, message = classify_vertex_request_error(exc)
+            logger.error(
+                "Vertex 连接验证失败: provider_id={}, model_id={}, error={}",
+                provider_id,
+                model_id,
+                error_code,
+            )
+            return {
+                "success": False,
+                "message": message,
+                "error_code": error_code,
+                "validation_scope": None,
+                "models": [],
+            }
+
+        # 5. 只有有效模型响应才算成功：空结果或被拦截不伪装成功。
+        if not response.content.strip():
+            return {
+                "success": False,
+                "message": _VERTEX_RESPONSE_BLOCKED_MESSAGE,
+                "error_code": VERTEX_ERROR_RESPONSE_BLOCKED,
+                "validation_scope": None,
+                "models": [],
+            }
+
+        return {
+            "success": True,
+            "message": "模型调用验证成功",
+            "error_code": None,
+            # 仅证明本次项目、区域、凭据和模型组合可调用。
+            "validation_scope": "model_invocation",
+            "models": [
+                {"id": model_id, "name": model_id, "task_type": "llm", "metadata": None}
+            ],
+        }
+
+    def _resolve_validation_credentials(
+        self,
+        existing: ModelProvider | None,
+        credentials_action: str,
+        service_account_json: str | None,
+    ) -> str | None:
+        """按凭据操作语义计算本次验证使用的 Service Account JSON（仅内存）。"""
+        if credentials_action not in VERTEX_CREDENTIALS_ACTIONS:
+            raise VertexConfigError("credentials_action 只允许 keep、replace 或 clear")
+        if credentials_action == "replace":
+            if service_account_json is None or not service_account_json.strip():
+                raise VertexConfigError(
+                    "credentials_action=replace 必须提供 service_account_json"
+                )
+            # 结构校验：坏凭据报凭据无效，不冒充配置错误（不校验密钥
+            # 有效性，密钥解析失败在连接解析阶段分类）。
+            try:
+                validate_vertex_service_account_json(service_account_json)
+            except VertexConfigError as exc:
+                raise VertexAuthError(
+                    f"Service Account 凭据无效：{exc}",
+                    error_code=VERTEX_ERROR_CREDENTIALS_INVALID,
+                ) from exc
+            return service_account_json
+        if service_account_json is not None and service_account_json.strip():
+            raise VertexConfigError(
+                "仅 credentials_action=replace 时可以提供 service_account_json"
+            )
+        if credentials_action == "clear":
+            return None
+        # keep：沿用已保存凭据。
+        if existing is None or not existing.credentials_encrypted:
+            return None
+        try:
+            return self.encryption_service.decrypt(existing.credentials_encrypted)
+        except Exception as exc:
+            raise VertexAuthError(
+                "已保存的 Vertex 凭据解密失败，请重新保存 Service Account",
+                error_code=VERTEX_ERROR_CREDENTIALS_INVALID,
+            ) from exc
+
+    @staticmethod
+    def _validate_validation_credentials_final_state(
+        config: VertexProviderConfig, service_account_json: str | None
+    ) -> None:
+        """校验本次验证的认证模式与凭据最终状态组合（与保存语义一致）。"""
+        if config.auth_mode == "service_account":
+            if service_account_json is None or not service_account_json.strip():
+                raise VertexAuthError(
+                    "Service Account 认证需要提供凭据；没有已保存的凭据时请重新提供",
+                    error_code=VERTEX_ERROR_CREDENTIALS_MISSING,
+                )
+        elif config.auth_mode == "adc":
+            if service_account_json is not None and service_account_json.strip():
+                # ADC + 凭据属矛盾输入，直接拒绝（不触发认证解析）。
+                raise VertexConfigError(
+                    "ADC 认证不能保留 Service Account 凭据，请先清除"
+                    "（credentials_action=clear）"
+                )
+
     # ========================
     # 模型列表获取（Executor执行点）
     # ========================
@@ -738,7 +952,9 @@ class ModelProviderService:
         )
 
         # 检查是否支持
-        runtime_provider_type = self._resolve_runtime_provider_type(provider.provider_type)
+        runtime_provider_type = self._resolve_runtime_provider_type(
+            provider.provider_type
+        )
         if not AdapterRegistry.is_supported(runtime_provider_type, task_type):
             raise ValueError(
                 f"Provider '{provider.provider_type}' does not support task_type '{task_type}'"
@@ -769,7 +985,9 @@ class ModelProviderService:
                             headers=request_headers,
                         )
                     else:
-                        models = await adapter.get_llm_models(client, provider.url, api_key)
+                        models = await adapter.get_llm_models(
+                            client, provider.url, api_key
+                        )
                 elif task_type == "rerank":
                     if request_headers:
                         models = await adapter.get_rerank_models(
@@ -779,7 +997,9 @@ class ModelProviderService:
                             headers=request_headers,
                         )
                     else:
-                        models = await adapter.get_rerank_models(client, provider.url, api_key)
+                        models = await adapter.get_rerank_models(
+                            client, provider.url, api_key
+                        )
                 else:
                     if request_headers:
                         models = await adapter.get_embedding_models(
@@ -789,7 +1009,9 @@ class ModelProviderService:
                             headers=request_headers,
                         )
                     else:
-                        models = await adapter.get_embedding_models(client, provider.url, api_key)
+                        models = await adapter.get_embedding_models(
+                            client, provider.url, api_key
+                        )
 
                 logger.info(
                     f"Successfully fetched {len(models)} models for provider={provider.provider_type}, task_type={task_type}"

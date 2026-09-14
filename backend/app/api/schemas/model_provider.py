@@ -32,8 +32,7 @@ class ModelProviderResponse(BaseModel):
     provider_config: dict[str, Any] = Field(
         default_factory=dict,
         description=(
-            "非敏感配置（Vertex 为 project_id/location/auth_mode，"
-            "其他提供商为空对象）"
+            "非敏感配置（Vertex 为 project_id/location/auth_mode，其他提供商为空对象）"
         ),
     )
     has_credentials: bool = Field(
@@ -70,11 +69,35 @@ class ModelProviderValidateRequest(BaseModel):
     """验证提供商连接请求。"""
 
     provider_type: str = Field(description="提供商类型")
-    url: str = Field(description="服务 URL")
-    api_key: str = Field(description="API Key")
+    # Vertex 连接不提供 URL 与 API Key（端点由 SDK 按项目与区域构造）。
+    url: str = Field(default="", description="服务 URL")
+    api_key: str = Field(default="", description="API Key")
     custom_headers: list["CustomHeaderEntry"] = Field(
         default_factory=list,
         description="自定义请求头",
+    )
+    provider_config: str | None = Field(
+        default=None,
+        description=(
+            "Vertex 非敏感配置（JSON 字符串）；提供时为草稿值，"
+            "省略时配合 provider_id 使用已保存配置"
+        ),
+    )
+    credentials_action: str = Field(
+        default="keep",
+        description="Vertex 凭据操作（keep/replace/clear），仅用于本次验证",
+    )
+    service_account_json: str | None = Field(
+        default=None,
+        description="Vertex Service Account JSON（仅 replace 时传入，不保存）",
+    )
+    model_id: str | None = Field(
+        default=None,
+        description="Vertex 测试模型 ID（Vertex 验证必填）",
+    )
+    provider_id: str | None = Field(
+        default=None,
+        description="可选的已保存连接 ID，用于读取旧配置与旧凭据参与验证",
     )
 
 
@@ -112,3 +135,14 @@ class ModelProviderValidateResponse(BaseModel):
     success: bool = Field(description="是否验证成功")
     message: str = Field(description="消息")
     models: list[AvailableModel] = Field(description="可用模型列表")
+    error_code: str | None = Field(
+        default=None,
+        description="验证失败错误码（Vertex 按第 6.2 节分类；非 Vertex 为空）",
+    )
+    validation_scope: str | None = Field(
+        default=None,
+        description=(
+            "验证范围；Vertex 成功时为 model_invocation，"
+            "仅证明本次项目、区域、凭据和模型组合可调用"
+        ),
+    )
