@@ -5,12 +5,12 @@
  */
 
 import type { IndexAutoStrategy, IndexMode } from "@/lib/index-status";
+import type { ThemeConfig, ThemeConfigResponse, ThemeMode, ThemePresetId } from "@/lib/theme";
+
+export type { ThemeMode } from "@/lib/theme";
 
 /** 支持的语言代码 */
 export type LanguageCode = "zh-CN" | "en";
-
-/** 支持的主题 */
-export type ThemeMode = "light" | "dark";
 
 export type AgentToolPermissionMode = "allow" | "ask" | "deny";
 
@@ -28,6 +28,10 @@ export interface AgentToolMetadata {
 export interface Settings {
   language: LanguageCode;
   theme: ThemeMode;
+  themePreset: ThemePresetId;
+  lightThemePreset: ThemePresetId;
+  darkThemePreset: ThemePresetId;
+  themeConfig: ThemeConfig;
   fontFamily: string;
   codeFontFamily: string;
   baseFontSize: number;
@@ -57,6 +61,10 @@ export interface Settings {
 export interface SettingsResponse {
   language: string;
   theme: string;
+  theme_preset?: string;
+  light_theme_preset?: string;
+  dark_theme_preset?: string;
+  theme_config?: ThemeConfigResponse;
   font_family: string;
   code_font_family?: string;
   base_font_size?: number;
@@ -89,6 +97,10 @@ export interface SettingsResponse {
 export interface SettingsUpdateRequest {
   language?: string;
   theme?: string;
+  theme_preset?: string;
+  light_theme_preset?: string;
+  dark_theme_preset?: string;
+  theme_config?: ThemeConfigResponse;
   font_family?: string;
   code_font_family?: string;
   base_font_size?: number;

@@ -8,9 +8,6 @@ import { useTranslation } from "react-i18next";
 
 import { Spinner, toast } from "@/components";
 import { saveLanguagePreference } from "@/i18n";
-
-import "./settings-dialog.css";
-
 import {
   applyBaseFontSize,
   applyCodeFontFamily,
@@ -19,6 +16,11 @@ import {
   loadConfiguredFonts,
 } from "@/lib/font-utils";
 import { OVERALL_INDEX_STATUS_QUERY_KEY } from "@/lib/index-status";
+
+import "./settings-dialog.css";
+
+import type { ThemeSettings } from "@/lib/theme";
+import { serializeThemeConfig } from "@/lib/theme";
 
 import { AdvancedSettings } from "../components/advanced-settings";
 import { AgentDefinitionsSettings } from "../components/agent-definitions-settings";
@@ -29,6 +31,7 @@ import { EditorSettings } from "../components/editor-settings";
 import { GeneralSettings } from "../components/general-settings";
 import { IndexSettings } from "../components/index-settings";
 import { ModelsSettings } from "../components/models-settings";
+import { PersonalizationSettings } from "../components/personalization-settings";
 import { RulesSettings } from "../components/rules-settings";
 import { SettingsSidebar } from "../components/settings-sidebar";
 import { SkillsSettings } from "../components/skills-settings";
@@ -41,7 +44,7 @@ import {
   DEFAULT_SETTINGS_ROUTE_CATEGORY,
   type ModelSettingsTab,
 } from "../lib/settings-route";
-import type { Settings, SettingsUpdateRequest } from "../lib/settings.types";
+import type { Settings, SettingsUpdateRequest, ThemeMode } from "../lib/settings.types";
 
 const MotionBox = motion.create(Box);
 
@@ -60,8 +63,10 @@ const mobilePageVariants = {
 };
 
 interface SettingsContentProps {
-  appearance: "light" | "dark";
-  onAppearanceChange: (appearance: "light" | "dark") => void;
+  themeMode: ThemeMode;
+  onThemeModeChange: (themeMode: ThemeMode) => void;
+  onThemeSettingsChange: (settings: ThemeSettings) => void;
+  onThemePreviewChange: (settings: ThemeSettings) => void;
   onClose: () => void;
   route?: {
     category: SettingsCategory;
@@ -71,6 +76,7 @@ interface SettingsContentProps {
 
 const CATEGORY_TITLE_KEY_MAP: Record<SettingsCategory, string> = {
   general: "settings.general",
+  personalization: "settings.personalization",
   editor: "settings.editor",
   connections: "settings.connections",
   models: "settings.models",
@@ -85,8 +91,10 @@ const CATEGORY_TITLE_KEY_MAP: Record<SettingsCategory, string> = {
 };
 
 export function SettingsContent({
-  appearance,
-  onAppearanceChange,
+  themeMode,
+  onThemeModeChange,
+  onThemeSettingsChange,
+  onThemePreviewChange,
   onClose,
   route,
 }: SettingsContentProps) {
@@ -167,15 +175,19 @@ export function SettingsContent({
       ...serverSettings,
       ...editedSettings,
       language: (editedSettings.language ?? i18n.language) as Settings["language"],
-      theme: editedSettings.theme ?? appearance,
+      theme: editedSettings.theme ?? themeMode,
     };
-  }, [serverSettings, editedSettings, i18n.language, appearance]);
+  }, [serverSettings, editedSettings, i18n.language, themeMode]);
 
   const saveMutation = useMutation({
     mutationFn: async (settings: Settings) => {
       const request: SettingsUpdateRequest = {
         language: settings.language,
         theme: settings.theme,
+        theme_preset: settings.themePreset,
+        light_theme_preset: settings.lightThemePreset,
+        dark_theme_preset: settings.darkThemePreset,
+        theme_config: serializeThemeConfig(settings.themeConfig),
         font_family: settings.fontFamily,
         code_font_family: settings.codeFontFamily,
         base_font_size: settings.baseFontSize,
@@ -202,7 +214,14 @@ export function SettingsContent({
         setEditedSettings({});
         void i18n.changeLanguage(previousSettings.language);
         saveLanguagePreference(previousSettings.language);
-        onAppearanceChange(previousSettings.theme);
+        onThemeModeChange(previousSettings.theme);
+        onThemeSettingsChange({
+          theme: previousSettings.theme,
+          themePreset: previousSettings.themePreset,
+          lightThemePreset: previousSettings.lightThemePreset,
+          darkThemePreset: previousSettings.darkThemePreset,
+          themeConfig: previousSettings.themeConfig,
+        });
         applyFontFamily(previousSettings.fontFamily);
         applyCodeFontFamily(previousSettings.codeFontFamily);
         applyBaseFontSize(previousSettings.baseFontSize);
@@ -223,7 +242,14 @@ export function SettingsContent({
     (newSettings: Settings) => {
       void i18n.changeLanguage(newSettings.language);
       saveLanguagePreference(newSettings.language);
-      onAppearanceChange(newSettings.theme);
+      onThemeModeChange(newSettings.theme);
+      onThemeSettingsChange({
+        theme: newSettings.theme,
+        themePreset: newSettings.themePreset,
+        lightThemePreset: newSettings.lightThemePreset,
+        darkThemePreset: newSettings.darkThemePreset,
+        themeConfig: newSettings.themeConfig,
+      });
       applyFontFamily(newSettings.fontFamily);
       applyCodeFontFamily(newSettings.codeFontFamily);
       applyBaseFontSize(newSettings.baseFontSize);
@@ -232,13 +258,14 @@ export function SettingsContent({
       setEditedSettings(newSettings);
       saveMutation.mutate(newSettings);
     },
-    [i18n, onAppearanceChange, saveMutation],
+    [i18n, onThemeModeChange, onThemeSettingsChange, saveMutation],
   );
 
   const isSplitPanelCategory =
     activeCategory === "agents" || activeCategory === "skills" || activeCategory === "rules";
   const shouldUseFormPagePadding =
     activeCategory === "general" ||
+    activeCategory === "personalization" ||
     activeCategory === "editor" ||
     activeCategory === "connections" ||
     activeCategory === "models" ||
@@ -390,6 +417,14 @@ export function SettingsContent({
                 settings={displaySettings}
                 isSaving={saveMutation.isPending}
                 onSettingsChange={handleSettingsChange}
+              />
+            ) : null}
+            {activeCategory === "personalization" ? (
+              <PersonalizationSettings
+                settings={displaySettings}
+                isSaving={saveMutation.isPending}
+                onSettingsChange={handleSettingsChange}
+                onThemePreviewChange={onThemePreviewChange}
               />
             ) : null}
             {activeCategory === "editor" ? <EditorSettings /> : null}

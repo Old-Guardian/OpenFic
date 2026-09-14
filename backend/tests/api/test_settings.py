@@ -83,6 +83,21 @@ async def test_get_settings_default(client: AsyncClient) -> None:
     # 验证默认值
     assert data["language"] == "zh-CN"
     assert data["theme"] == "light"
+    assert data["theme_preset"] == "classic"
+    assert data["light_theme_preset"] == "classic"
+    assert data["dark_theme_preset"] == "classic"
+    assert data["theme_config"] == {
+        "light": {
+            "accent": "#000000",
+            "gray": "#646464",
+            "background": "#ffffff",
+        },
+        "dark": {
+            "accent": "#ffffff",
+            "gray": "#b4b4b4",
+            "background": "#111111",
+        },
+    }
     assert data["font_family"] == "system-ui"
     assert data["code_font_family"] == "ui-monospace"
     assert data["base_font_size"] == 14
@@ -132,6 +147,79 @@ async def test_update_settings_theme(client: AsyncClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["theme"] == "dark"
+
+
+@pytest.mark.asyncio
+async def test_update_settings_theme_configuration(client: AsyncClient) -> None:
+    """主题预设和 Radix 外观配置应可保存并返回。"""
+    response = await client.put(
+        "/api/v1/settings",
+        json={
+            "theme": "dark",
+            "theme_preset": "custom",
+            "light_theme_preset": "solarized",
+            "dark_theme_preset": "nord",
+            "theme_config": {
+                "light": {
+                    "accent": "#268bd2",
+                    "gray": "#839496",
+                    "background": "#fdf6e3",
+                },
+                "dark": {
+                    "accent": "#268bd2",
+                    "gray": "#839496",
+                    "background": "#002b36",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["theme_preset"] == "custom"
+    assert response.json()["light_theme_preset"] == "solarized"
+    assert response.json()["dark_theme_preset"] == "nord"
+    assert response.json()["theme_config"] == {
+        "light": {
+            "accent": "#268bd2",
+            "gray": "#839496",
+            "background": "#fdf6e3",
+        },
+        "dark": {
+            "accent": "#268bd2",
+            "gray": "#839496",
+            "background": "#002b36",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_settings_invalid_theme_configuration_falls_back(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """数据库中的非法主题配置应回退到安全默认值。"""
+    await setting_repo.upsert(
+        session,
+        "theme_config",
+        '{"light":{"background":"not-a-hex"}}',
+    )
+    await session.commit()
+
+    response = await client.get("/api/v1/settings")
+
+    assert response.status_code == 200
+    assert response.json()["theme_config"] == {
+        "light": {
+            "accent": "#000000",
+            "gray": "#646464",
+            "background": "#ffffff",
+        },
+        "dark": {
+            "accent": "#ffffff",
+            "gray": "#b4b4b4",
+            "background": "#111111",
+        },
+    }
 
 
 @pytest.mark.asyncio

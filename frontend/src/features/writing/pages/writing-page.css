@@ -28,7 +28,12 @@
 
 .writing-page-sidebar--right {
   border-left: 1px solid var(--gray-a4);
-  background: var(--gray-a2);
+  background: var(--theme-sidebar-background);
+}
+
+.writing-sidebar-segmented-control {
+  background-color: var(--theme-input-background);
+  background-image: linear-gradient(var(--theme-input-background), var(--theme-input-background));
 }
 
 .writing-page-group .writing-page-sidebar--left,
@@ -110,7 +115,7 @@
   position: absolute;
   inset: 0;
   z-index: 10;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--color-overlay);
 }
 
 .writing-page-mobile-sidebar-sheet {

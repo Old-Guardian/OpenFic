@@ -1,10 +1,12 @@
-import type { ThemeMode } from "@/features/settings/lib/settings.types";
 import type { LanguageCode } from "@/i18n";
+import type { ThemeAppearance, ThemeVariables } from "@/lib/theme";
 
 export interface DesktopAppearancePayload {
-  appearance?: ThemeMode;
+  appearance?: ThemeAppearance;
   fontFamily?: string;
   codeFontFamily?: string;
+  themeVariables?: ThemeVariables;
+  persist?: boolean;
 }
 
 export interface SocketDiagnosticPayload {

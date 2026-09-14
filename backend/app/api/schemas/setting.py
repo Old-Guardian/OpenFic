@@ -33,11 +33,42 @@ class ClearAuditDetailsResponse(BaseModel):
     cleared_detail_bytes: int = Field(description="已清空详情字段的 UTF-8 字节数估算")
 
 
+THEME_COLOR_PATTERN = r"^#[0-9a-fA-F]{6}$"
+
+
+class ThemePalette(BaseModel):
+    """Radix Custom palette 的基础色和可选完整变量。"""
+
+    accent: str = Field(default="#000000", pattern=THEME_COLOR_PATTERN)
+    gray: str = Field(default="#646464", pattern=THEME_COLOR_PATTERN)
+    background: str = Field(default="#ffffff", pattern=THEME_COLOR_PATTERN)
+    variables: dict[str, str] | None = Field(default=None, description="完整主题 CSS 变量")
+
+
+def _default_dark_theme_palette() -> ThemePalette:
+    return ThemePalette(
+        accent="#ffffff",
+        gray="#b4b4b4",
+        background="#111111",
+    )
+
+
+class ThemeConfig(BaseModel):
+    """Radix Themes 可使用的双模式完整色板。"""
+
+    light: ThemePalette = Field(default_factory=ThemePalette)
+    dark: ThemePalette = Field(default_factory=_default_dark_theme_palette)
+
+
 class SettingsResponse(BaseModel):
     """设置响应。"""
 
     language: str = Field(default="zh-CN", description="语言")
     theme: str = Field(default="light", description="主题")
+    theme_preset: str = Field(default="classic", description="主题预设 ID")
+    light_theme_preset: str = Field(default="classic", description="浅色主题预设 ID")
+    dark_theme_preset: str = Field(default="classic", description="深色主题预设 ID")
+    theme_config: ThemeConfig = Field(default_factory=ThemeConfig, description="主题外观配置")
     font_family: str = Field(default="system-ui", description="字体")
     code_font_family: str = Field(default="ui-monospace", description="代码字体")
     base_font_size: int = Field(default=14, description="基础字号（px）")
@@ -98,6 +129,10 @@ class SettingsUpdateRequest(BaseModel):
 
     language: str | None = Field(default=None, description="语言")
     theme: str | None = Field(default=None, description="主题")
+    theme_preset: str | None = Field(default=None, description="主题预设 ID")
+    light_theme_preset: str | None = Field(default=None, description="浅色主题预设 ID")
+    dark_theme_preset: str | None = Field(default=None, description="深色主题预设 ID")
+    theme_config: ThemeConfig | None = Field(default=None, description="主题外观配置")
     font_family: str | None = Field(default=None, description="字体")
     code_font_family: str | None = Field(default=None, description="代码字体")
     base_font_size: int | None = Field(default=None, description="基础字号（px）")

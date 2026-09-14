@@ -699,7 +699,10 @@ export function ConnectionFormDialog({
       open={open}
       onOpenChange={handleOpenChange}
     >
-      <Dialog.Content maxWidth="520px">
+      <Dialog.Content
+        maxWidth="520px"
+        className="settings-background-panel"
+      >
         <Dialog.Title>
           {isEditing ? t("connections.editConnection") : t("connections.createConnection")}
         </Dialog.Title>

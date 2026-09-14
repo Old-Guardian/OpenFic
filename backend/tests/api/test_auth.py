@@ -68,6 +68,21 @@ async def test_public_preferences_expose_only_interface_preferences(monkeypatch)
             code_font_family="JetBrains Mono Variable",
             base_font_size=18,
             editor_font_size=20,
+            theme_preset="midnight",
+            light_theme_preset="solarized",
+            dark_theme_preset="nord",
+            theme_config={
+                "light": {
+                    "accent": "#000000",
+                    "gray": "#646464",
+                    "background": "#ffffff",
+                },
+                "dark": {
+                    "accent": "#ffffff",
+                    "gray": "#b4b4b4",
+                    "background": "#111111",
+                },
+            },
         )
 
     async def fake_session():
@@ -86,6 +101,21 @@ async def test_public_preferences_expose_only_interface_preferences(monkeypatch)
         "code_font_family": "JetBrains Mono Variable",
         "base_font_size": 18,
         "editor_font_size": 20,
+        "theme_preset": "midnight",
+        "light_theme_preset": "solarized",
+        "dark_theme_preset": "nord",
+        "theme_config": {
+            "light": {
+                "accent": "#000000",
+                "gray": "#646464",
+                "background": "#ffffff",
+            },
+            "dark": {
+                "accent": "#ffffff",
+                "gray": "#b4b4b4",
+                "background": "#111111",
+            },
+        },
     }
 
 
