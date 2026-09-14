@@ -612,3 +612,60 @@ async def test_vertex_write_blocked_by_agent_settings_lock(
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "agent_settings_locked"
+
+
+# ======================== 模型列表（T3） ========================
+
+
+@pytest.mark.asyncio
+async def test_get_vertex_models_without_credentials(client: AsyncClient):
+    """ADC 模式、无任何已保存凭据时即可读取目录列表（离线，无网络请求）。"""
+    created = await _create_vertex(client, auth_mode="adc")
+    assert created.status_code == 201
+
+    response = await client.get(f"/api/v1/model-providers/{created.json()['id']}/models")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["models"]
+    assert all(model["id"].startswith("gemini") for model in data["models"])
+    assert not any(model["id"].startswith("claude") for model in data["models"])
+
+
+@pytest.mark.asyncio
+async def test_get_vertex_models_with_service_account_does_not_leak_credentials(
+    client: AsyncClient,
+):
+    """已保存 Service Account 的连接读取列表时不回显凭据。"""
+    created = await _create_vertex(
+        client,
+        auth_mode="service_account",
+        credentials_action="replace",
+        service_account_json=_service_account_json(),
+    )
+    assert created.status_code == 201
+
+    response = await client.get(f"/api/v1/model-providers/{created.json()['id']}/models")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert _SA_PRIVATE_KEY_SENTINEL not in response.text
+
+
+@pytest.mark.asyncio
+async def test_get_vertex_models_rejects_embedding_task(client: AsyncClient):
+    """第一阶段仅支持 LLM 任务类型。"""
+    created = await _create_vertex(client, auth_mode="adc")
+    assert created.status_code == 201
+
+    response = await client.get(
+        f"/api/v1/model-providers/{created.json()['id']}/models",
+        params={"task_type": "embedding"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is False
+    assert data["models"] == []
+    assert "does not support task_type" in data["message"]

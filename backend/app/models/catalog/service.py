@@ -19,6 +19,7 @@ from app.models.catalog.types import (
     CatalogProviderSummary,
 )
 from app.models.registry import AdapterRegistry
+from app.models.vertex_config import VERTEX_PROVIDER_TYPE
 from app.settings import BACKEND_DATA_DIR
 
 
@@ -70,6 +71,9 @@ _PROVIDER_BY_MODELS_DEV_ID = {
     definition.models_dev_provider_id: definition for definition in _PROVIDER_DEFINITIONS
 }
 _REGISTERED_PROVIDER_TYPES = frozenset(AdapterRegistry.list_providers())
+# 原生接入第一阶段的 Vertex：任务类型以 Adapter 声明为准，不受快照模型
+# 数量影响，避免上游快照新增模型时自动启用未实现任务（第 5.2 节）。
+_TASK_LIMITED_PROVIDER_TYPES = frozenset({VERTEX_PROVIDER_TYPE})
 _EMBEDDING_FAMILIES = {
     "text-embedding",
     "mistral-embed",
@@ -232,6 +236,11 @@ class ModelProviderCatalogService:
     def get_supported_task_types(
         self, provider_type: str, catalog_match: CatalogMatch | None = None
     ) -> list[str]:
+        if provider_type in _TASK_LIMITED_PROVIDER_TYPES:
+            # Vertex 任务类型以 Adapter 已实现能力为上限，忽略目录模型数量。
+            if provider_type in _REGISTERED_PROVIDER_TYPES:
+                return AdapterRegistry.get_supported_task_types(provider_type)
+            return []
         supported = set()
         if provider_type in _REGISTERED_PROVIDER_TYPES:
             supported.update(AdapterRegistry.get_supported_task_types(provider_type))
@@ -436,6 +445,11 @@ class ModelProviderCatalogService:
     def _supported_task_types_for(
         self, provider_type: str, counts: dict[str, int]
     ) -> list[str]:
+        if provider_type in _TASK_LIMITED_PROVIDER_TYPES:
+            # Vertex 任务类型以 Adapter 已实现能力为上限，忽略目录模型数量。
+            if provider_type in _REGISTERED_PROVIDER_TYPES:
+                return AdapterRegistry.get_supported_task_types(provider_type)
+            return []
         supported = set()
         if provider_type in _REGISTERED_PROVIDER_TYPES:
             supported.update(AdapterRegistry.get_supported_task_types(provider_type))

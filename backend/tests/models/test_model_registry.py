@@ -11,6 +11,7 @@ def test_registry_lists_only_current_first_class_provider_types() -> None:
         "openai",
         "anthropic",
         "google-genai",
+        "google-vertex",
         "ollama",
         "groq",
         "huggingface",
@@ -25,4 +26,3 @@ def test_registry_lists_only_current_first_class_provider_types() -> None:
         "anthropic-compatible",
         "gemini-compatible",
     }
-    assert "google-vertex" not in AdapterRegistry.list_providers()

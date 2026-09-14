@@ -30,6 +30,7 @@ from app.api.agent_settings_lock import require_agent_settings_unlocked
 from app.models.catalog import ModelProviderCatalogService
 from app.core.encryption import EncryptionService
 from app.core.errors import NotFoundError
+from app.models.vertex_config import VERTEX_PROVIDER_TYPE
 from app.settings import settings
 from app.storage.database import get_session
 from app.models.services import ModelProviderService
@@ -400,8 +401,10 @@ async def get_provider_models(
         # 获取提供商信息
         provider = await service.get_provider_by_id(session, provider_id)
 
-        # 内置提供商无需 API Key，直接返回固定模型列表
-        if provider.is_builtin:
+        # 内置提供商无需 API Key，直接返回固定模型列表；
+        # Vertex 模型列表来自随包目录，读取同样不要求 API Key 或 ADC
+        # （目录 success 仅表示列表读取成功，不代表凭据可用）。
+        if provider.is_builtin or provider.provider_type == VERTEX_PROVIDER_TYPE:
             models = await service.get_available_models(
                 provider=provider,
                 task_type=task_type,

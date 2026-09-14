@@ -592,6 +592,43 @@ class ModelProviderService:
     # 模型列表获取（Executor执行点）
     # ========================
 
+    @staticmethod
+    def _resolve_runtime_provider_type(provider_type: str) -> str:
+        """
+        解析运行时 Provider 类型（validate_and_get_models 与
+        get_available_models 共用的路由规则，见实施计划第 5.2 节）。
+
+        Vertex 显式路由到原生 Adapter；google-vertex-anthropic 保持既有
+        兼容回退，不进入 Gemini 后端。
+        """
+        if provider_type == VERTEX_PROVIDER_TYPE:
+            return VERTEX_PROVIDER_TYPE
+        if provider_type in (
+            "anthropic-compatible",
+            "openai-compatible-responses",
+            "gemini-compatible",
+        ):
+            return provider_type
+        return "openai-compatible"
+
+    async def _get_vertex_models(self) -> list[dict[str, str]]:
+        """经 Vertex Adapter 读取目录模型列表（离线，无凭据，不发起网络请求）。"""
+        try:
+            response = await self.catalog_service.get_provider_models(
+                VERTEX_PROVIDER_TYPE, "llm"
+            )
+        except KeyError:
+            return []
+        catalog_models = [
+            {"id": model.model_id, "name": model.display_name}
+            for model in response.models
+        ]
+        adapter = AdapterRegistry.get_adapter(
+            VERTEX_PROVIDER_TYPE, catalog_models=catalog_models
+        )
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            return await adapter.get_llm_models(client, "", "")
+
     async def validate_and_get_models(
         self,
         provider_type: str,
@@ -617,15 +654,13 @@ class ModelProviderService:
         url = await self._resolve_provider_url(provider_type, url)
 
         # 使用统一的Adapter获取模型
-        runtime_provider_type = (
-            "anthropic-compatible"
-            if provider_type == "anthropic-compatible"
-            else "openai-compatible-responses"
-            if provider_type == "openai-compatible-responses"
-            else "gemini-compatible"
-            if provider_type == "gemini-compatible"
-            else "openai-compatible"
-        )
+        runtime_provider_type = self._resolve_runtime_provider_type(provider_type)
+
+        if runtime_provider_type == VERTEX_PROVIDER_TYPE:
+            # Vertex：返回目录模型列表；success 仅表示列表读取成功，
+            # 不代表凭据可用（真实调用验证由 T5 接管）。
+            return await self._get_vertex_models()
+
         adapter = AdapterRegistry.get_adapter(runtime_provider_type)
         request_headers = self._normalize_custom_headers(provider_type, custom_headers)
 
@@ -669,19 +704,16 @@ class ModelProviderService:
         )
 
         # 检查是否支持
-        runtime_provider_type = (
-            "anthropic-compatible"
-            if provider.provider_type == "anthropic-compatible"
-            else "openai-compatible-responses"
-            if provider.provider_type == "openai-compatible-responses"
-            else "gemini-compatible"
-            if provider.provider_type == "gemini-compatible"
-            else "openai-compatible"
-        )
+        runtime_provider_type = self._resolve_runtime_provider_type(provider.provider_type)
         if not AdapterRegistry.is_supported(runtime_provider_type, task_type):
             raise ValueError(
                 f"Provider '{provider.provider_type}' does not support task_type '{task_type}'"
             )
+
+        if runtime_provider_type == VERTEX_PROVIDER_TYPE:
+            # Vertex：目录注入的静态列表，读取不要求 API Key 或 ADC，
+            # 也不解密任何凭据。
+            return await self._get_vertex_models()
 
         # 获取Adapter
         adapter = AdapterRegistry.get_adapter(runtime_provider_type)
