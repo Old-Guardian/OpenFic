@@ -16,6 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.encryption import EncryptionService
 from app.core.errors import NotFoundError
 from app.models.catalog import CatalogMatch, ModelProviderCatalogService
+from app.models.clients.google_vertex_auth import (
+    VERTEX_ERROR_CREDENTIALS_INVALID,
+    VertexAuthError,
+    VertexConnectionContext,
+    build_vertex_connection_context_async,
+)
 from app.models.entities.model_provider import ModelProvider
 from app.models.registry import AdapterRegistry
 from app.models.repos import model_provider_repo
@@ -587,6 +593,34 @@ class ModelProviderService:
         except Exception as e:
             logger.warning(f"Failed to decrypt API key for provider {provider.id}: {e}")
             return None
+
+    async def resolve_vertex_connection_context(
+        self, provider: ModelProvider
+    ) -> VertexConnectionContext:
+        """
+        在调用边界解析 Vertex 连接上下文（第 5.1 节共享连接解析）。
+
+        解密已保存的 Service Account 并构造仅限内存的连接上下文；
+        阻塞部分（ADC 解析、RSA 私钥解析）在线程中执行，不阻塞事件循环。
+        每次调用解析新配置，不做全局缓存。
+
+        Raises:
+            VertexConfigError: 已保存的 Vertex 配置缺失或无效。
+            VertexAuthError: 凭据解密、解析或 ADC 解析失败（消息已脱敏）。
+        """
+        config = load_vertex_provider_config(self.get_provider_config_payload(provider))
+        service_account_json: str | None = None
+        if provider.credentials_encrypted:
+            try:
+                service_account_json = self.encryption_service.decrypt(
+                    provider.credentials_encrypted
+                )
+            except Exception as exc:
+                raise VertexAuthError(
+                    "已保存的 Vertex 凭据解密失败，请重新保存 Service Account",
+                    error_code=VERTEX_ERROR_CREDENTIALS_INVALID,
+                ) from exc
+        return await build_vertex_connection_context_async(config, service_account_json)
 
     # ========================
     # 模型列表获取（Executor执行点）

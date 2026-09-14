@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_core.language_models import LanguageModelInput
@@ -7,6 +7,7 @@ from langchain_core.runnables import Runnable
 
 from app.core.utils.tiktoken import seed_bundled_encodings
 from app.models.clients.deepseek_payload import patch_deepseek_reasoning_payload
+from app.models.clients.google_vertex_auth import VertexConnectionContext
 from app.models.clients.model_params import (
     DEFAULT_FREQUENCY_PENALTY,
     DEFAULT_MIN_P,
@@ -25,6 +26,7 @@ from app.models.helpers.openrouter_attribution import (
     OPENROUTER_APP_TITLE,
     OPENROUTER_APP_URL,
 )
+from app.models.vertex_config import VERTEX_PROVIDER_TYPE
 
 
 @dataclass
@@ -45,6 +47,8 @@ class ModelConfig:
     presence_penalty: float | None = DEFAULT_PRESENCE_PENALTY
     repetition_penalty: float | None = DEFAULT_REPETITION_PENALTY
     reasoning_effort: ReasoningEffort | None = None
+    # Vertex 内存连接上下文（仅运行期持有，凭据对象不参与 repr、日志和序列化）。
+    vertex_connection: VertexConnectionContext | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         self.temperature = with_default(self.temperature, DEFAULT_TEMPERATURE)
@@ -161,6 +165,9 @@ def create_chat_model(config: ModelConfig) -> Runnable[LanguageModelInput, BaseM
 
         google_kwargs = _compact_kwargs(
             model=config.model_id,
+            # 显式固定 Developer API 后端：即使后端环境存在
+            # GOOGLE_GENAI_USE_VERTEXAI=true 也不切换（见实施计划 3.1 节已知边界）。
+            vertexai=False,
             google_api_key=config.api_key,
             temperature=_non_default(config.temperature, DEFAULT_TEMPERATURE),
             top_p=_non_default(config.top_p, DEFAULT_TOP_P),
@@ -178,6 +185,9 @@ def create_chat_model(config: ModelConfig) -> Runnable[LanguageModelInput, BaseM
 
         gemini_kwargs = _compact_kwargs(
             model=config.model_id,
+            # 显式固定 Developer API 后端：即使后端环境存在
+            # GOOGLE_GENAI_USE_VERTEXAI=true 也不切换（见实施计划 3.1 节已知边界）。
+            vertexai=False,
             google_api_key=config.api_key,
             temperature=_non_default(config.temperature, DEFAULT_TEMPERATURE),
             top_p=_non_default(config.top_p, DEFAULT_TOP_P),
@@ -193,6 +203,28 @@ def create_chat_model(config: ModelConfig) -> Runnable[LanguageModelInput, BaseM
                 "api_endpoint": _gemini_compatible_base_url(config.base_url)
             }
         return ChatGoogleGenerativeAI(**gemini_kwargs)
+
+    if provider == VERTEX_PROVIDER_TYPE:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        # Vertex 原生分支：显式传入项目、区域和解析后的凭据对象；禁止传入
+        # 任何 API Key 参数（第 3.1/5.1 节）。凭据在调用边界（运行开始时）
+        # 由共享连接解析生成，客户端生命周期内复用。
+        if config.vertex_connection is None:
+            raise ValueError("Vertex 连接上下文不可用，无法构造模型客户端")
+        return ChatGoogleGenerativeAI(**_compact_kwargs(
+            model=config.model_id,
+            vertexai=True,
+            project=config.vertex_connection.project_id,
+            location=config.vertex_connection.location,
+            credentials=config.vertex_connection.credentials,
+            temperature=_non_default(config.temperature, DEFAULT_TEMPERATURE),
+            top_p=_non_default(config.top_p, DEFAULT_TOP_P),
+            top_k=_non_default(config.top_k, DEFAULT_TOP_K),
+            max_output_tokens=config.max_tokens,
+            thinking_level=_three_level_reasoning_effort(reasoning_effort),
+            max_retries=0,
+        ))
 
     if provider == "deepseek":
         from langchain_deepseek import ChatDeepSeek

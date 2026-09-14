@@ -11,6 +11,7 @@ from app.models.entities.model import Model
 from app.models.entities.model_provider import ModelProvider
 from app.models.repos import model_provider_repo, model_repo
 from app.models.services.model_provider_service import ModelProviderService
+from app.models.vertex_config import VERTEX_PROVIDER_TYPE
 from app.settings import settings
 from app.storage.repos import setting_repo
 
@@ -53,10 +54,19 @@ async def resolve_background_llm(
         raise BackgroundModelUnavailableError(f"模型提供商不存在: {model.provider_id}")
 
     encryption_service = EncryptionService(settings.encryption_key)
-    api_key = encryption_service.decrypt(provider.api_key_encrypted)
-    custom_headers = ModelProviderService(
-        encryption_service
-    ).get_decrypted_custom_headers(provider)
+    provider_service = ModelProviderService(encryption_service)
+
+    # Vertex：在调用边界解析连接上下文，不读取 API Key 字段。
+    vertex_connection = None
+    api_key = ""
+    if provider.provider_type == VERTEX_PROVIDER_TYPE:
+        vertex_connection = await provider_service.resolve_vertex_connection_context(
+            provider
+        )
+    else:
+        api_key = encryption_service.decrypt(provider.api_key_encrypted)
+
+    custom_headers = provider_service.get_decrypted_custom_headers(provider)
     return ResolvedLLM(
         client=LLMClient(
             LLMConfig(
@@ -75,6 +85,7 @@ async def resolve_background_llm(
                 presence_penalty=model.presence_penalty,
                 repetition_penalty=model.repetition_penalty,
                 request_timeout=int(settings.llm_request_timeout),
+                vertex_connection=vertex_connection,
             )
         ),
         model=model,
