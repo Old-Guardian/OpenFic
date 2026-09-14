@@ -3,10 +3,15 @@ from typing import Any
 
 
 def without_api_key(model_config: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the model configuration safe to persist in graph state."""
+    """Return the model configuration safe to persist in graph state.
+
+    剔除全部运行时机密：API Key、自定义请求头，以及 Vertex 的内存
+    连接上下文（含 Google Credentials 对象，不可序列化也不可持久化）。
+    """
     persisted_config = dict(model_config)
     persisted_config.pop("api_key", None)
     persisted_config.pop("custom_headers", None)
+    persisted_config.pop("vertex_connection", None)
     return persisted_config
 
 

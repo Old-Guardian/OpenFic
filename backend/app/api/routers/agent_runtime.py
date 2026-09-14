@@ -80,8 +80,10 @@ from app.api.schemas.agent import (
 from app.core.encryption import EncryptionService
 from app.core.errors import NotFoundError
 from app.core.ids import generate_id
+from app.models.clients.google_vertex_auth import VertexAuthError
 from app.models.repos import model_provider_repo, model_repo
 from app.models.services.model_provider_service import ModelProviderService
+from app.models.vertex_config import VERTEX_PROVIDER_TYPE, VertexConfigError
 from app.settings import settings
 from app.background.jobs.session_title_jobs import enqueue_session_title_job
 from app.background.jobs import service as background_service
@@ -464,6 +466,7 @@ async def _build_model_config(
     api_key: str,
     reasoning_effort: str | None = None,
     custom_headers: dict[str, str] | None = None,
+    vertex_connection=None,
 ) -> dict:
     model_config = {
         "model_record_id": model.id,
@@ -490,6 +493,9 @@ async def _build_model_config(
         model_config["reasoning_effort"] = reasoning_effort
     if custom_headers:
         model_config["custom_headers"] = custom_headers
+    if vertex_connection is not None:
+        # 仅限内存的运行时上下文，持久化前由 without_api_key 剔除。
+        model_config["vertex_connection"] = vertex_connection
     return model_config
 
 
@@ -525,14 +531,32 @@ async def _resolve_model_config(
         raise NotFoundError(f"模型提供商不存在：{model.provider_id}")
 
     encryption_service = EncryptionService(settings.encryption_key)
+    provider_service = ModelProviderService(encryption_service)
+
+    if provider.provider_type == VERTEX_PROVIDER_TYPE:
+        # Vertex：在调用边界解析连接上下文（解密 + ADC/Service Account 解析），
+        # 不读取 API Key 字段。
+        try:
+            vertex_connection = await provider_service.resolve_vertex_connection_context(
+                provider
+            )
+        except (VertexConfigError, VertexAuthError) as exc:
+            raise ValueError(str(exc)) from exc
+        return await _build_model_config(
+            model,
+            provider,
+            api_key="",
+            reasoning_effort=reasoning_effort,
+            custom_headers=None,
+            vertex_connection=vertex_connection,
+        )
+
     try:
         api_key = encryption_service.decrypt(provider.api_key_encrypted)
     except Exception as exc:
         raise ValueError("API密钥解密失败") from exc
 
-    custom_headers = ModelProviderService(
-        encryption_service
-    ).get_decrypted_custom_headers(provider)
+    custom_headers = provider_service.get_decrypted_custom_headers(provider)
     return await _build_model_config(
         model,
         provider,

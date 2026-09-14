@@ -25,6 +25,7 @@ from loguru import logger
 
 from app.core.errors import LLMTimeoutError
 from app.models.clients.deepseek_payload import patch_deepseek_reasoning_payload
+from app.models.clients.google_vertex_auth import VertexConnectionContext
 from app.models.clients.model_factory import ModelConfig, ReasoningEffort, create_chat_model
 
 
@@ -59,6 +60,8 @@ class LLMConfig:
     repetition_penalty: float | None = 1.0
     reasoning_effort: ReasoningEffort | None = None
     request_timeout: int = DEFAULT_LLM_TIMEOUT
+    # Vertex 内存连接上下文（仅运行期持有，不参与序列化）。
+    vertex_connection: VertexConnectionContext | None = None
 
 
 @dataclass
@@ -121,6 +124,7 @@ class LLMClient:
                 presence_penalty=config.presence_penalty,
                 repetition_penalty=config.repetition_penalty,
                 reasoning_effort=config.reasoning_effort,
+                vertex_connection=config.vertex_connection,
             )
         )
 

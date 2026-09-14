@@ -4,7 +4,7 @@
  * 外部连接设置面板，管理模型服务提供商连接。
  */
 
-import { Box, Flex, Text, Button, IconButton, Tooltip } from "@radix-ui/themes";
+import { Badge, Box, Button, Flex, IconButton, Text, Tooltip } from "@radix-ui/themes";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, Edit, Component } from "lucide-react";
 import { useState, useCallback, useEffect, useMemo } from "react";
@@ -258,6 +258,10 @@ export function ConnectionsSettings({
                             (isCustomProviderType(connection.providerType)
                               ? connection.url
                               : null) ||
+                            (connection.providerType === "google-vertex" &&
+                            connection.providerConfig?.project_id
+                              ? `${connection.providerConfig.project_id} (${connection.providerConfig.location || "us-central1"})`
+                              : null) ||
                             resolveProviderDisplayName(connection)}
                         </Text>
                       </Flex>
@@ -272,6 +276,29 @@ export function ConnectionsSettings({
                           {connection.catalogMatch?.displayName ||
                             getProviderDisplayName(connection.providerType)}
                         </Text>
+                        {connection.providerType === "google-vertex" && (
+                          <>
+                            <Text
+                              size="2"
+                              color="gray"
+                            >
+                              •
+                            </Text>
+                            <Badge
+                              size="1"
+                              color={
+                                connection.providerConfig?.auth_mode === "service_account"
+                                  ? "green"
+                                  : "blue"
+                              }
+                              variant="soft"
+                            >
+                              {connection.providerConfig?.auth_mode === "service_account"
+                                ? t("connections.authModeServiceAccount")
+                                : t("connections.authModeAdc")}
+                            </Badge>
+                          </>
+                        )}
                         {isCustomProviderType(connection.providerType) &&
                           !connection.catalogMatch && (
                             <>

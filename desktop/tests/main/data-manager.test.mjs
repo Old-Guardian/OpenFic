@@ -70,6 +70,32 @@ test("backup and restore round-trips data directory contents", async () => {
   }
 });
 
+test("backup bundles encryption key with database; ADC credentials remain external", async () => {
+  const base = await mkdtemp(path.join(os.tmpdir(), "openfic-data-"));
+  try {
+    const source = await createDataDir(base, "instance_source");
+    const archivePath = path.join(base, "vertex_backup.tar.gz");
+    const restored = path.join(base, "instance_restored");
+
+    // Backup bundles the encryption key so Service Account encrypted credentials can be decrypted
+    await backupDataDir(source, archivePath);
+    await restoreDataDir(archivePath, restored);
+
+    const originalKey = await readFile(path.join(source, ".key"), "utf8");
+    const restoredKey = await readFile(path.join(restored, ".key"), "utf8");
+    assert.equal(restoredKey, originalKey);
+
+    // Verify ADC credentials are not copied into the data directory
+    const inspection = await inspectDataDir(restored);
+    assert.equal(inspection.valid, true);
+    // ADC credentials file must not exist inside the application data directory
+    const adcFileInData = path.join(restored, "application_default_credentials.json");
+    await assert.rejects(stat(adcFileInData));
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
 test("migrate copies data and preserves the source directory", async () => {
   const base = await mkdtemp(path.join(os.tmpdir(), "openfic-data-"));
   try {

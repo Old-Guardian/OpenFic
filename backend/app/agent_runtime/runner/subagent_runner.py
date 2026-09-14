@@ -59,6 +59,7 @@ from app.core.encryption import EncryptionService
 from app.models.clients.model_factory import ModelConfig, create_chat_model
 from app.models.repos import model_provider_repo, model_repo
 from app.models.services.model_provider_service import ModelProviderService
+from app.models.vertex_config import VERTEX_PROVIDER_TYPE
 from app.socket import emit
 from app.socket.handlers import (
     agent_session_room,
@@ -174,10 +175,38 @@ async def _build_model_config_from_record(session: Any, record_id: str) -> dict[
         return None
 
     encryption_service = EncryptionService(settings.encryption_key)
+    provider_service = ModelProviderService(encryption_service)
+
+    if provider.provider_type == VERTEX_PROVIDER_TYPE:
+        # Vertex：在调用边界解析连接上下文；解析失败直接报错，
+        # 不回退到继承的其他连接（第 5.3 节）。
+        vertex_connection = await provider_service.resolve_vertex_connection_context(
+            provider
+        )
+        return {
+            "provider_type": provider.provider_type,
+            "base_url": provider.url,
+            "api_key": "",
+            "model_id": model.model_id,
+            "max_context_tokens": model.context_length,
+            "input_price": getattr(model, "input_price", 0.0),
+            "output_price": getattr(model, "output_price", 0.0),
+            "cache_read_price": getattr(model, "cache_read_price", 0.0),
+            "cache_write_price": getattr(model, "cache_write_price", 0.0),
+            "temperature": model.temperature,
+            "top_p": model.top_p,
+            "top_k": model.top_k,
+            "min_p": model.min_p,
+            "top_a": model.top_a,
+            "max_tokens": model.max_tokens,
+            "frequency_penalty": model.frequency_penalty,
+            "presence_penalty": model.presence_penalty,
+            "repetition_penalty": model.repetition_penalty,
+            "vertex_connection": vertex_connection,
+        }
+
     api_key = encryption_service.decrypt(provider.api_key_encrypted)
-    custom_headers = ModelProviderService(
-        encryption_service
-    ).get_decrypted_custom_headers(provider)
+    custom_headers = provider_service.get_decrypted_custom_headers(provider)
     return {
         "provider_type": provider.provider_type,
         "base_url": provider.url,

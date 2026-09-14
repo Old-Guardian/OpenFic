@@ -13,6 +13,7 @@ from app.models.adapters.anthropic_compatible import AnthropicCompatibleAdapter
 from app.models.adapters.deepseek import DeepSeekAdapter
 from app.models.adapters.gemini_compatible import GeminiCompatibleAdapter
 from app.models.adapters.google_genai import GoogleGenAIAdapter
+from app.models.adapters.google_vertex import GoogleVertexAdapter
 from app.models.adapters.mistral import MistralAdapter
 from app.models.adapters.openai import OpenAIAdapter
 from app.models.adapters.openai_compat_family import (
@@ -39,6 +40,7 @@ class AdapterRegistry:
         "anthropic-compatible": AnthropicCompatibleAdapter,
         "gemini-compatible": GeminiCompatibleAdapter,
         "google-genai": GoogleGenAIAdapter,
+        "google-vertex": GoogleVertexAdapter,
         "ollama": OpenAICompatibleAdapter,
         "groq": GroqAdapter,
         "huggingface": HuggingFaceAdapter,
@@ -53,12 +55,15 @@ class AdapterRegistry:
     }
 
     @classmethod
-    def get_adapter(cls, provider_type: str) -> BaseAdapter:
+    def get_adapter(cls, provider_type: str, **kwargs) -> BaseAdapter:
         """
         根据provider_type获取对应的Adapter实例。
 
         Args:
             provider_type: 提供商类型（如 openai, openrouter等）。
+            **kwargs: 传递给 Adapter 构造函数的连接上下文（如 Vertex 的
+                catalog_models）；目前仅 Vertex Adapter 接受额外参数，
+                其他 Provider 的调用方式保持无参兼容。
 
         Returns:
             对应的Adapter实例。
@@ -74,6 +79,8 @@ class AdapterRegistry:
             if not adapter_class:
                 raise ValueError(f"No adapter found for provider_type='{provider_type}'")
 
+        if kwargs:
+            return adapter_class(**kwargs)
         return adapter_class()
 
     @classmethod

@@ -30,6 +30,11 @@ from app.api.agent_settings_lock import require_agent_settings_unlocked
 from app.models.catalog import ModelProviderCatalogService
 from app.core.encryption import EncryptionService
 from app.core.errors import NotFoundError
+from app.models.vertex_config import VERTEX_PROVIDER_TYPE, VertexConfigError
+from app.models.clients.google_vertex_auth import (
+    VERTEX_ERROR_CONFIG_INVALID,
+    VertexAuthError,
+)
 from app.settings import settings
 from app.storage.database import get_session
 from app.models.services import ModelProviderService
@@ -96,6 +101,8 @@ async def _build_provider_response(
         name=provider.name,
         url=provider.url,
         provider_type=provider.provider_type,
+        provider_config=service.get_provider_config_payload(provider),
+        has_credentials=bool(provider.credentials_encrypted),
         custom_header_names=service.get_custom_header_names(provider),
         supported_task_types=supported_task_types,
         icon_path=icon_path,
@@ -171,11 +178,16 @@ async def get_provider(
     summary="创建提供商",
 )
 async def create_provider(
-    url: Annotated[str, Form()],
     provider_type: Annotated[str, Form()],
     name: Annotated[str, Form()] = "",
+    # 允许为空：Vertex 连接不配置服务 URL（FastAPI 会把空表单值视为缺失，
+    # 因此不能依赖 Form 的必填校验；非 Vertex 的 URL 必填由 service 层执行）。
+    url: Annotated[str, Form()] = "",
     api_key: Annotated[str | None, Form()] = None,
     custom_headers: Annotated[str | None, Form()] = None,
+    provider_config: Annotated[str | None, Form()] = None,
+    credentials_action: Annotated[str, Form()] = "keep",
+    service_account_json: Annotated[str | None, Form()] = None,
     session: AsyncSession = Depends(get_session),
     service: ModelProviderService = Depends(get_provider_service),
 ) -> ModelProviderResponse:
@@ -187,6 +199,9 @@ async def create_provider(
         url: 服务 URL。
         api_key: API Key。
         provider_type: 提供商类型。
+        provider_config: Vertex 非敏感配置（JSON 字符串）。
+        credentials_action: Vertex 凭据操作（keep/replace/clear）。
+        service_account_json: Vertex Service Account JSON（仅 replace 时传入）。
         session: 数据库 session。
         service: 提供商服务。
 
@@ -204,9 +219,14 @@ async def create_provider(
             api_key=api_key or "",
             provider_type=provider_type,
             custom_headers=_parse_custom_headers(custom_headers),
+            provider_config=provider_config,
+            credentials_action=credentials_action,
+            service_account_json=service_account_json,
         )
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
+        ) from e
 
     return await _build_provider_response(provider, service)
 
@@ -223,6 +243,9 @@ async def update_provider(
     api_key: Annotated[str | None, Form()] = None,
     provider_type: Annotated[str | None, Form()] = None,
     custom_headers: Annotated[str | None, Form()] = None,
+    provider_config: Annotated[str | None, Form()] = None,
+    credentials_action: Annotated[str, Form()] = "keep",
+    service_account_json: Annotated[str | None, Form()] = None,
     session: AsyncSession = Depends(get_session),
     service: ModelProviderService = Depends(get_provider_service),
 ) -> ModelProviderResponse:
@@ -235,6 +258,9 @@ async def update_provider(
         url: 服务 URL。
         api_key: API Key。
         provider_type: 提供商类型。
+        provider_config: Vertex 非敏感配置（JSON 字符串），省略则保留。
+        credentials_action: Vertex 凭据操作（keep/replace/clear）。
+        service_account_json: Vertex Service Account JSON（仅 replace 时传入）。
         session: 数据库 session。
         service: 提供商服务。
 
@@ -256,6 +282,9 @@ async def update_provider(
             api_key=api_key,
             provider_type=provider_type,
             custom_headers=_parse_custom_headers(custom_headers),
+            provider_config=provider_config,
+            credentials_action=credentials_action,
+            service_account_json=service_account_json,
         )
 
         return await _build_provider_response(provider, service)
@@ -304,6 +333,7 @@ async def delete_provider(
 )
 async def validate_provider(
     request: ModelProviderValidateRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
     service: Annotated[ModelProviderService, Depends(get_provider_service)],
 ) -> ModelProviderValidateResponse:
     """
@@ -311,6 +341,7 @@ async def validate_provider(
 
     Args:
         request: 验证请求。
+        session: 数据库 session（Vertex 编辑模式读取旧配置与旧凭据）。
         service: 提供商服务。
 
     Returns:
@@ -318,12 +349,51 @@ async def validate_provider(
     """
     logger.info(f"验证提供商连接: {request.provider_type}")
 
+    # Vertex：真实模型调用验证（T5），不落入 OpenAI 兼容分支。
+    if request.provider_type == VERTEX_PROVIDER_TYPE:
+        try:
+            result = await service.validate_vertex_connection(
+                session=session,
+                provider_config=request.provider_config,
+                credentials_action=request.credentials_action,
+                service_account_json=request.service_account_json,
+                model_id=request.model_id,
+                provider_id=request.provider_id,
+            )
+        except NotFoundError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        except (VertexConfigError, VertexAuthError) as e:
+            logger.error("Vertex 连接验证输入无效: {}", str(e))
+            # VertexConfigError 属配置域错误（第 6.2 节 vertex_config_invalid）；
+            # VertexAuthError 自带脱敏 error_code。
+            error_code = (
+                VERTEX_ERROR_CONFIG_INVALID
+                if isinstance(e, VertexConfigError)
+                else e.error_code
+            )
+            return ModelProviderValidateResponse(
+                success=False,
+                message=str(e),
+                models=[],
+                error_code=error_code,
+                validation_scope=None,
+            )
+        return ModelProviderValidateResponse(
+            success=result["success"],
+            message=result["message"],
+            models=[AvailableModel.model_validate(model) for model in result["models"]],
+            error_code=result["error_code"],
+            validation_scope=result["validation_scope"],
+        )
+
     try:
         models = await service.validate_and_get_models(
             provider_type=request.provider_type,
             url=request.url,
             api_key=request.api_key,
-            custom_headers=[item.model_dump(mode="json") for item in request.custom_headers],
+            custom_headers=[
+                item.model_dump(mode="json") for item in request.custom_headers
+            ],
         )
         return ModelProviderValidateResponse(
             success=True,
@@ -378,8 +448,10 @@ async def get_provider_models(
         # 获取提供商信息
         provider = await service.get_provider_by_id(session, provider_id)
 
-        # 内置提供商无需 API Key，直接返回固定模型列表
-        if provider.is_builtin:
+        # 内置提供商无需 API Key，直接返回固定模型列表；
+        # Vertex 模型列表来自随包目录，读取同样不要求 API Key 或 ADC
+        # （目录 success 仅表示列表读取成功，不代表凭据可用）。
+        if provider.is_builtin or provider.provider_type == VERTEX_PROVIDER_TYPE:
             models = await service.get_available_models(
                 provider=provider,
                 task_type=task_type,
@@ -392,7 +464,9 @@ async def get_provider_models(
             return ModelProviderValidateResponse(
                 success=True,
                 message="获取模型列表成功",
-                models=[AvailableModel.model_validate(model) for model in enriched_models],
+                models=[
+                    AvailableModel.model_validate(model) for model in enriched_models
+                ],
             )
 
         # 获取解密后的 API Key
