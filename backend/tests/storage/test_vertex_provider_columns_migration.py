@@ -1,26 +1,38 @@
 # -*- coding: utf-8 -*-
 """
-1021 迁移测试：model_providers 新增 Vertex 配置与凭据列。
+1022 迁移测试：model_providers 新增 Vertex 配置与凭据列。
 
 验证旧数据升级后保持原值，新列默认值正确（provider_config='{}'、
 credentials_encrypted=''），downgrade 可回退。
 """
 
 import importlib
+from pathlib import Path
 
+from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection
 
 
 migration = importlib.import_module(
-    "app.storage.migrations.versions.1021_add_vertex_provider_config_and_credentials"
+    "app.storage.migrations.versions.1022_add_vertex_provider_config_and_credentials"
 )
+MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "app" / "storage" / "migrations"
+
+
+def test_migration_graph_has_single_vertex_head() -> None:
+    """确保新增迁移不会与现有 revision 冲突或产生分叉。"""
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+
+    assert ScriptDirectory.from_config(config).get_heads() == ["1022"]
 
 
 def _create_legacy_schema(connection: Connection) -> None:
-    """升级前的 model_providers 结构（1020 之后、1021 之前）。"""
+    """升级前的 model_providers 结构（1021 之后、1022 之前）。"""
     connection.execute(
         text(
             "CREATE TABLE model_providers ("

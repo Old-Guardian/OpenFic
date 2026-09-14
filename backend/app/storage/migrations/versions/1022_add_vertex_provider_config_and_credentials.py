@@ -1,7 +1,7 @@
 """add vertex provider config and credentials to model providers
 
-Revision ID: 1021
-Revises: 1020
+Revision ID: 1022
+Revises: 1021
 Create Date: 2026-09-13 10:00:00.000000
 
 为 google-vertex 原生接入增加非敏感配置（provider_config）与
@@ -17,8 +17,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "1021"
-down_revision: Union[str, Sequence[str], None] = "1020"
+revision: str = "1022"
+down_revision: Union[str, Sequence[str], None] = "1021"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
