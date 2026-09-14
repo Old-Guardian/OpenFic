@@ -1,4 +1,4 @@
-import { Box, Flex, Popover, ScrollArea, Text, TextField } from "@radix-ui/themes";
+import { Badge, Box, Flex, Popover, ScrollArea, Text, TextField } from "@radix-ui/themes";
 import { Check, ChevronDown, Component, Search } from "lucide-react";
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -261,6 +261,7 @@ export function ProviderIdSelect({
                             align="center"
                             gap="2"
                             className="provider-id-select-option-main"
+                            style={{ flex: 1, minWidth: 0 }}
                           >
                             <ProviderOptionIcon
                               option={option}
@@ -272,6 +273,24 @@ export function ProviderIdSelect({
                             >
                               {option.label}
                             </Text>
+                            {option.value === "google-vertex" && (
+                              <Badge
+                                size="1"
+                                color="green"
+                                variant="soft"
+                              >
+                                {t("connections.vertexGeminiBadge")}
+                              </Badge>
+                            )}
+                            {option.value === "google-vertex-anthropic" && (
+                              <Badge
+                                size="1"
+                                color="amber"
+                                variant="soft"
+                              >
+                                {t("connections.vertexAnthropicBadge")}
+                              </Badge>
+                            )}
                           </Flex>
                           {isSelected ? (
                             <Check

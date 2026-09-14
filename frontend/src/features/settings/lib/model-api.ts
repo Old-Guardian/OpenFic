@@ -61,6 +61,8 @@ interface ModelProviderValidateApiResponse {
   success: boolean;
   message: string;
   models: ModelProviderAvailableModelApiResponse[];
+  error_code?: string | null;
+  validation_scope?: string | null;
 }
 
 export interface ModelValidationResponse {
@@ -130,6 +132,8 @@ function transformProvider(raw: ModelProviderResponse): ModelProvider {
     name: raw.name,
     url: raw.url,
     providerType: raw.provider_type as ModelProvider["providerType"],
+    providerConfig: raw.provider_config,
+    hasCredentials: raw.has_credentials ?? false,
     customHeaderNames: raw.custom_header_names ?? [],
     supportedTaskTypes: raw.supported_task_types as ModelProvider["supportedTaskTypes"],
     iconPath: raw.icon_path || null,
@@ -297,6 +301,8 @@ export async function validateProvider(
   return {
     ...response.data,
     models: (response.data.models || []).map((model) => transformAvailableModel(model, "remote")),
+    error_code: response.data.error_code ?? null,
+    validation_scope: response.data.validation_scope ?? null,
   };
 }
 

@@ -10,12 +10,22 @@ export type ProviderType = string;
 /** 任务类型 */
 export type TaskType = "llm" | "embedding" | "rerank";
 
+/** Vertex AI 连接配置 */
+export interface VertexProviderConfig {
+  project_id?: string;
+  location?: string;
+  auth_mode?: "adc" | "service_account";
+  [key: string]: unknown;
+}
+
 /** 模型服务提供商 */
 export interface ModelProvider {
   id: string;
   name: string;
   url: string;
   providerType: ProviderType;
+  providerConfig?: VertexProviderConfig;
+  hasCredentials?: boolean;
   customHeaderNames: string[];
   supportedTaskTypes: TaskType[];
   iconPath: string | null;
@@ -43,6 +53,8 @@ export interface ModelProviderResponse {
   name: string;
   url: string;
   provider_type: string;
+  provider_config?: VertexProviderConfig;
+  has_credentials?: boolean;
   custom_header_names?: string[];
   supported_task_types: string[];
   icon_path: string | null;
@@ -69,6 +81,11 @@ export interface ModelProviderValidateRequest {
   url: string;
   api_key: string;
   custom_headers?: ModelProviderCustomHeader[];
+  provider_config?: string | null;
+  credentials_action?: "keep" | "replace" | "clear";
+  service_account_json?: string | null;
+  model_id?: string | null;
+  provider_id?: string | null;
 }
 
 export interface ModelProviderCustomHeader {
@@ -100,6 +117,8 @@ export interface ModelProviderValidateResponse {
   success: boolean;
   message: string;
   models: AvailableModel[];
+  error_code?: string | null;
+  validation_scope?: string | null;
 }
 
 /** 模型 */
