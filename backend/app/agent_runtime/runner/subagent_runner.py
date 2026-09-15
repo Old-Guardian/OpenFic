@@ -14,6 +14,10 @@ from app.agent_runtime.agents.definitions import (
     AgentDefinition,
     load_agent_definition,
 )
+from app.agent_runtime.agents.model_policy import (
+    SYSTEM_DEFAULT_MODEL_REFERENCE,
+    SYSTEM_LIGHT_MODEL_REFERENCE,
+)
 from app.audit import AuditContext
 from app.agent_runtime.agents.tool_categories import get_tool_names_for_categories
 from app.agent_runtime.context.helpers import extract_referenced_skill_ids
@@ -73,8 +77,6 @@ from app.storage.repos import setting_repo
 from app.storage.services import task_service
 
 
-SYSTEM_DEFAULT_MODEL_REFERENCE = "__system_default_model__"
-SYSTEM_LIGHT_MODEL_REFERENCE = "__system_light_model__"
 _SUBAGENT_RESTRICTED_TOOL_NAMES = frozenset(
     ("dispatch_subagent", "notify_subagent", "recycle_subagent", "ask_user")
 )

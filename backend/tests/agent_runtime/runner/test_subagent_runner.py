@@ -89,10 +89,8 @@ def stub_checkpointer(monkeypatch):
 async def test_resolve_agent_model_config_prefers_configured_default_setting(
     db_session_factory,
 ):
-    from app.agent_runtime.runner.subagent_runner import (
-        SYSTEM_DEFAULT_MODEL_REFERENCE,
-        _resolve_agent_model_config,
-    )
+    from app.agent_runtime.agents.model_policy import SYSTEM_DEFAULT_MODEL_REFERENCE
+    from app.agent_runtime.runner.subagent_runner import _resolve_agent_model_config
     from app.core.encryption import EncryptionService
     from app.models.entities.model import Model
     from app.models.entities.model_provider import ModelProvider
@@ -146,10 +144,8 @@ async def test_resolve_agent_model_config_prefers_configured_default_setting(
 async def test_resolve_agent_model_config_falls_back_to_inherited_when_unconfigured(
     db_session_factory,
 ):
-    from app.agent_runtime.runner.subagent_runner import (
-        SYSTEM_DEFAULT_MODEL_REFERENCE,
-        _resolve_agent_model_config,
-    )
+    from app.agent_runtime.agents.model_policy import SYSTEM_DEFAULT_MODEL_REFERENCE
+    from app.agent_runtime.runner.subagent_runner import _resolve_agent_model_config
 
     inherited = {
         "provider_type": "openai",
