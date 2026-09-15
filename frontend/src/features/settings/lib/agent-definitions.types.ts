@@ -6,6 +6,15 @@ import i18n from "@/i18n";
  * 智能体定义前端类型，对齐后端 /agent-definitions API。
  */
 
+export type AgentReasoningEffort =
+  | "inherit"
+  | "off"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
 export interface AgentDefinitionResponse {
   key: string;
   display_name: string;
@@ -13,6 +22,7 @@ export interface AgentDefinitionResponse {
   kind: "primary" | "subagent";
   prompt_agent_name: string;
   model_id: string | null;
+  reasoning_effort: AgentReasoningEffort;
   enabled_tool_categories: string[];
   enabled_skills: string[];
   metadata: Record<string, unknown>;
@@ -30,6 +40,7 @@ export interface AgentDefinitionCreateRequest {
   kind: "primary" | "subagent";
   prompt_agent_name: string;
   model_id: string | null;
+  reasoning_effort?: AgentReasoningEffort;
   enabled_tool_categories: string[];
   enabled_skills: string[];
   metadata: Record<string, unknown>;
@@ -44,6 +55,7 @@ export interface AgentDefinitionUpdateRequest {
   kind?: "primary" | "subagent" | null;
   prompt_agent_name?: string | null;
   model_id?: string | null;
+  reasoning_effort?: AgentReasoningEffort | null;
   enabled_tool_categories?: string[] | null;
   enabled_skills?: string[] | null;
   metadata?: Record<string, unknown> | null;

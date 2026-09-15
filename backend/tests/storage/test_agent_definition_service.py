@@ -490,3 +490,111 @@ async def test_delete_removes_delegatable_reference_from_primaries():
             assert "explore" in build.delegatable_agents
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_definition_defaults_reasoning_effort_to_inherit():
+    from app.storage.services import agent_definition_service
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+    try:
+        async with factory() as session:
+            record = await agent_definition_service.create_definition(
+                session,
+                key="default-effort-bot",
+                display_name="Default Effort Bot",
+                description="",
+                kind="subagent",
+                prompt_agent_name="default-effort-bot",
+                model_id=None,
+                enabled_tool_categories=[],
+                enabled_skills=[],
+                metadata={},
+                delegatable_agents=[],
+            )
+
+        assert record.reasoning_effort == "inherit"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_definition_persists_explicit_reasoning_effort():
+    from app.storage.services import agent_definition_service
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+    try:
+        async with factory() as session:
+            record = await agent_definition_service.create_definition(
+                session,
+                key="effort-bot",
+                display_name="Effort Bot",
+                description="",
+                kind="subagent",
+                prompt_agent_name="effort-bot",
+                model_id=None,
+                enabled_tool_categories=[],
+                enabled_skills=[],
+                metadata={},
+                delegatable_agents=[],
+                reasoning_effort="high",
+            )
+
+        assert record.reasoning_effort == "high"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_update_definition_sets_keeps_and_restores_reasoning_effort():
+    from app.storage.services import agent_definition_service
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+    try:
+        async with factory() as session:
+            await agent_definition_service.create_definition(
+                session,
+                key="effort-set-bot",
+                display_name="Effort Set Bot",
+                description="",
+                kind="subagent",
+                prompt_agent_name="effort-set-bot",
+                model_id=None,
+                enabled_tool_categories=[],
+                enabled_skills=[],
+                metadata={},
+                delegatable_agents=[],
+                reasoning_effort="high",
+            )
+            await session.commit()
+
+            # 省略该字段表示保留原值。
+            kept = await agent_definition_service.update_definition(
+                session,
+                key="effort-set-bot",
+                display_name="Renamed",
+            )
+            assert kept.reasoning_effort == "high"
+
+            # 显式 inherit 表示恢复继承。
+            restored = await agent_definition_service.update_definition(
+                session,
+                key="effort-set-bot",
+                reasoning_effort="inherit",
+            )
+
+        assert restored.reasoning_effort == "inherit"
+    finally:
+        await engine.dispose()
