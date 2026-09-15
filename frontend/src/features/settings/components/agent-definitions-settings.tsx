@@ -58,14 +58,18 @@ import type {
   AgentToolCategoryResponse,
   AgentDefinitionResponse,
   AgentDefinitionCreateRequest,
+  AgentReasoningEffort,
 } from "../lib/agent-definitions.types";
 import {
+  DEFAULT_AGENT_REASONING_EFFORT,
   getAgentKindLabel,
   getAgentKindOptions,
+  getAgentReasoningEffortOptions,
   SYSTEM_DEFAULT_MODEL_REFERENCE,
   SYSTEM_LIGHT_MODEL_REFERENCE,
 } from "../lib/agent-definitions.types";
 import { fetchSettings } from "../lib/settings-api";
+import type { Settings } from "../lib/settings.types";
 import { AgentBrandingPicker } from "./agent-branding-picker";
 import { AgentSettingsLockNotice } from "./agent-settings-lock-notice";
 
@@ -93,6 +97,25 @@ interface AgentListMenuState {
 function getEffectiveModelSelection(modelId: string | null): string {
   if (!modelId) return SYSTEM_DEFAULT_MODEL_REFERENCE;
   return modelId;
+}
+
+function getTargetModelOption(
+  selectedModelId: string,
+  llmModelOptions: ModelIdSelectOption[],
+  settings?: Settings,
+): ModelIdSelectOption | null {
+  let effectiveId = selectedModelId;
+  if (effectiveId === SYSTEM_DEFAULT_MODEL_REFERENCE) {
+    effectiveId = settings?.defaultModel ?? "";
+  } else if (effectiveId === SYSTEM_LIGHT_MODEL_REFERENCE) {
+    effectiveId = settings?.lightModel ?? "";
+  }
+  if (!effectiveId) return null;
+  return (
+    llmModelOptions.find(
+      (opt) => opt.value === effectiveId || opt.id === effectiveId,
+    ) ?? null
+  );
 }
 
 function getEnabledToolCategoriesForAgent(
@@ -131,6 +154,7 @@ interface AgentFormProps {
   hasLlmModels: boolean;
   toolCategoryOptions: AgentToolCategoryResponse[];
   skills: Skill[];
+  settings?: Settings;
   onCloseSettings?: () => void;
   onKindPreviewChange: (key: string, kind: AgentDefinitionResponse["kind"] | null) => void;
   onUpdated: (definition?: AgentDefinitionResponse) => void;
@@ -144,6 +168,7 @@ function AgentForm({
   hasLlmModels,
   toolCategoryOptions,
   skills,
+  settings,
   onCloseSettings,
   onKindPreviewChange,
   onUpdated,
@@ -159,6 +184,9 @@ function AgentForm({
   const [formColor, setFormColor] = useState<string | null>(def.color ?? DEFAULT_AGENT_COLOR);
   const [formIcon, setFormIcon] = useState<string | null>(def.icon ?? DEFAULT_AGENT_ICON);
   const [formModelId, setFormModelId] = useState(getEffectiveModelSelection(def.model_id));
+  const [formReasoningEffort, setFormReasoningEffort] = useState<AgentReasoningEffort>(
+    def.reasoning_effort ?? DEFAULT_AGENT_REASONING_EFFORT,
+  );
   const [formEnabledToolCategories, setFormEnabledToolCategories] = useState<string[]>([
     ...getEnabledToolCategoriesForAgent(def.kind, def.enabled_tool_categories),
   ]);
@@ -167,6 +195,21 @@ function AgentForm({
     ...def.delegatable_agents,
   ]);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+
+  useEffect(() => {
+    setFormDisplayName(def.display_name);
+    setFormDescription(def.description);
+    setFormKind(def.kind);
+    setFormColor(def.color ?? DEFAULT_AGENT_COLOR);
+    setFormIcon(def.icon ?? DEFAULT_AGENT_ICON);
+    setFormModelId(getEffectiveModelSelection(def.model_id));
+    setFormReasoningEffort(def.reasoning_effort ?? DEFAULT_AGENT_REASONING_EFFORT);
+    setFormEnabledToolCategories([
+      ...getEnabledToolCategoriesForAgent(def.kind, def.enabled_tool_categories),
+    ]);
+    setFormEnabledSkills([...def.enabled_skills]);
+    setFormDelegatableAgents([...def.delegatable_agents]);
+  }, [def]);
 
   useEffect(() => () => onKindPreviewChange(def.key, null), [def.key, onKindPreviewChange]);
 
@@ -194,6 +237,7 @@ function AgentForm({
       formColor !== (def.color ?? DEFAULT_AGENT_COLOR) ||
       formIcon !== (def.icon ?? DEFAULT_AGENT_ICON) ||
       formModelId !== getEffectiveModelSelection(def.model_id) ||
+      formReasoningEffort !== (def.reasoning_effort ?? DEFAULT_AGENT_REASONING_EFFORT) ||
       JSON.stringify(formEnabledToolCategories) !==
         JSON.stringify(getEnabledToolCategoriesForAgent(def.kind, def.enabled_tool_categories)) ||
       JSON.stringify(formEnabledSkills) !== JSON.stringify(def.enabled_skills) ||
@@ -207,6 +251,7 @@ function AgentForm({
     formColor,
     formIcon,
     formModelId,
+    formReasoningEffort,
     formEnabledToolCategories,
     formEnabledSkills,
     formDelegatableAgents,
@@ -223,6 +268,13 @@ function AgentForm({
     [formKind, toolCategoryOptions],
   );
 
+  const selectedModelOption = useMemo(
+    () => getTargetModelOption(formModelId, llmModelOptions, settings),
+    [formModelId, llmModelOptions, settings],
+  );
+  const reasoningCapability = selectedModelOption?.reasoning;
+  const showCapabilityNotice = formReasoningEffort !== "off";
+
   const updateMutation = useMutation({
     mutationFn: async () => {
       return updateAgentDefinition(def.key, {
@@ -230,6 +282,7 @@ function AgentForm({
         description: formDescription,
         ...(canChangeKind ? { kind: formKind } : {}),
         model_id: formModelId,
+        reasoning_effort: formReasoningEffort,
         color: formColor,
         icon: formIcon,
         enabled_tool_categories: getEnabledToolCategoriesForAgent(
@@ -426,9 +479,61 @@ function AgentForm({
           allowCustomValue={false}
           disabled={isAgentSettingsLocked || !hasLlmModels}
           triggerStyle={{ width: "100%" }}
-          triggerClassName="select-trigger--background"
+          triggerClassName="select-trigger--background agent-definition-model-trigger"
           contentClassName="settings-background-panel"
         />
+      </Flex>
+
+      <Flex
+        direction="column"
+        gap="1"
+      >
+        <Text
+          size="1"
+          weight="medium"
+          style={fieldLabelStyle}
+        >
+          {t("settings.agentsReasoningEffort")}
+        </Text>
+        <LabeledSelect
+          value={formReasoningEffort}
+          options={getAgentReasoningEffortOptions()}
+          onChange={(value) => setFormReasoningEffort(value as AgentReasoningEffort)}
+          disabled={isAgentSettingsLocked || updateMutation.isPending}
+          triggerStyle={{ width: "100%" }}
+          triggerClassName="select-trigger--background agent-definition-reasoning-effort-trigger"
+          triggerAriaLabel={t("settings.agentsReasoningEffort")}
+          contentClassName="settings-background-panel"
+        />
+        {formReasoningEffort === "inherit" ? (
+          <Text
+            size="1"
+            color="gray"
+            className="agent-definition-reasoning-inherit-notice"
+          >
+            {isPrimary
+              ? t("settings.agentsReasoningInheritPrimaryNotice")
+              : t("settings.agentsReasoningInheritSubagentNotice")}
+          </Text>
+        ) : null}
+        {showCapabilityNotice && reasoningCapability === false ? (
+          <Text
+            size="1"
+            color="amber"
+            className="agent-definition-reasoning-capability-notice"
+          >
+            {t("settings.agentsReasoningNotSupportedNotice")}
+          </Text>
+        ) : null}
+        {showCapabilityNotice && reasoningCapability == null ? (
+          <Text
+            size="1"
+            color="gray"
+            className="agent-definition-reasoning-capability-notice"
+          >
+            {t("settings.agentsReasoningUnknownNotice")}
+          </Text>
+        ) : null}
       </Flex>
 
       <Flex
@@ -921,6 +1026,7 @@ export function AgentDefinitionsSettings({
         kind: newKind,
         prompt_agent_name: newKey.trim(),
         model_id: sourceDefinition?.model_id ?? SYSTEM_DEFAULT_MODEL_REFERENCE,
+        reasoning_effort: sourceDefinition?.reasoning_effort ?? DEFAULT_AGENT_REASONING_EFFORT,
         enabled_tool_categories: getEnabledToolCategoriesForAgent(
           newKind,
           sourceDefinition?.enabled_tool_categories ?? [],
@@ -955,7 +1061,7 @@ export function AgentDefinitionsSettings({
   const resetMutation = useMutation({
     mutationFn: (key: string) => resetAgentDefinition(key),
     onSuccess: (result: AgentDefinitionResponse) => {
-      invalidateDefs();
+      updateDefinitionInList(result);
       setConfirmResetKey(null);
       setSelectedKey(result.key);
       toast.success(t("settings.agentsResetSuccess"));
@@ -1326,6 +1432,7 @@ export function AgentDefinitionsSettings({
       hasLlmModels={hasLlmModels}
       toolCategoryOptions={toolCategoryOptions}
       skills={skills}
+      settings={settings}
       onCloseSettings={onCloseSettings}
       onKindPreviewChange={handleKindPreviewChange}
       onUpdated={updateDefinitionInList}
