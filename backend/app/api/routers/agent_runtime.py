@@ -1038,14 +1038,17 @@ async def send_agent_message(
                 pending_message=AgentPendingMessageResponse(**pending_message),
             )
 
-    agent_key_changed = body.agent_key is not None and body.agent_key != runner.agent_key
+    runner_agent_key = getattr(runner, "agent_key", None)
+    agent_key_changed = body.agent_key is not None and body.agent_key != runner_agent_key
     if body.agent_key is not None:
         runner.agent_key = body.agent_key
 
-    current_def = await load_agent_definition(session, runner.agent_key)
+    current_def = await load_agent_definition(session, getattr(runner, "agent_key", "build") or "build")
     model_fields = body.model_fields_set
     model_id_specified = "model_id" in model_fields
     reasoning_effort_specified = "reasoning_effort" in model_fields
+
+    runner_model_config = getattr(runner, "model_config", None) or {}
 
     # Determine target model
     if model_id_specified:
@@ -1062,10 +1065,10 @@ async def send_agent_message(
         resolved_model_id = await _resolve_agent_model_record_id(
             session,
             current_def.model_id,
-            fallback_model_id=runner.model_config.get("model_record_id"),
+            fallback_model_id=runner_model_config.get("model_record_id"),
         )
     else:
-        resolved_model_id = runner.model_config.get("model_record_id")
+        resolved_model_id = runner_model_config.get("model_record_id")
 
     # Determine target reasoning effort
     if reasoning_effort_specified:
@@ -1082,7 +1085,7 @@ async def send_agent_message(
         else:
             effective_effort = None
     else:
-        effective_effort = runner.model_config.get("reasoning_effort")
+        effective_effort = runner_model_config.get("reasoning_effort")
         if effective_effort == "off":
             effective_effort = None
 
@@ -1092,7 +1095,8 @@ async def send_agent_message(
             new_model_config = await _resolve_model_config(
                 session, resolved_model_id, effective_effort
             )
-            runner.update_model_config(new_model_config)
+            if hasattr(runner, "update_model_config"):
+                runner.update_model_config(new_model_config)
             model_updated = True
         except NotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

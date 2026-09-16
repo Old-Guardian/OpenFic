@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel import SQLModel
 
+from app.agent_runtime.agents.model_policy import AgentReasoningEffort
 from app.agent_runtime.persistence import repo
 from app.agent_runtime.persistence.child_runs import (
     cancel_child_run,
@@ -2016,3 +2017,460 @@ async def test_wait_for_request_resolution_raises_on_cancelled_request() -> None
             )
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("parent_effort", "subagent_effort", "expected_effort"),
+    [
+        ("high", "inherit", "high"),
+        ("high", "off", None),
+        ("high", "medium", "medium"),
+        ("high", "low", "low"),
+        ("high", "xhigh", "xhigh"),
+        ("high", "max", "max"),
+        (None, "inherit", None),
+        (None, "off", None),
+        (None, "high", "high"),
+        ("off", "inherit", None),
+        ("off", "high", "high"),
+    ],
+)
+async def test_resolve_agent_model_config_reasoning_effort_combinations(
+    db_session_factory,
+    parent_effort: str | None,
+    subagent_effort: AgentReasoningEffort,
+    expected_effort: str | None,
+):
+    from app.agent_runtime.runner.subagent_runner import _resolve_agent_model_config
+
+    inherited = {
+        "provider_type": "openai",
+        "base_url": "",
+        "api_key": "parent-key",
+        "model_id": "model-parent",
+        "max_context_tokens": 8000,
+    }
+    if parent_effort is not None:
+        inherited["reasoning_effort"] = parent_effort
+
+    inherited_snapshot = dict(inherited)
+
+    async with db_session_factory() as session:
+        resolved = await _resolve_agent_model_config(
+            session,
+            configured_model_id=None,
+            inherited_config=inherited,
+            configured_reasoning_effort=subagent_effort,
+        )
+
+    assert inherited == inherited_snapshot, "inherited_config must not be modified"
+    assert "inherit" not in resolved.values()
+    assert resolved.get("reasoning_effort") != "off"
+
+    if expected_effort is None:
+        assert "reasoning_effort" not in resolved
+    else:
+        assert resolved["reasoning_effort"] == expected_effort
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_model_config_switches_model_and_applies_effort(
+    db_session_factory,
+):
+    from app.agent_runtime.runner.subagent_runner import _resolve_agent_model_config
+    from app.core.encryption import EncryptionService
+    from app.models.entities.model import Model
+    from app.models.entities.model_provider import ModelProvider
+    from app.settings import settings
+
+    api_key = EncryptionService(settings.encryption_key).encrypt("child-key")
+
+    async with db_session_factory() as session:
+        session.add(
+            ModelProvider(
+                id="provider-child",
+                url="https://child.example.com",
+                api_key_encrypted=api_key,
+                provider_type="anthropic",
+            )
+        )
+        session.add(
+            Model(
+                id="model-child",
+                name="Child Model",
+                provider_id="provider-child",
+                model_id="claude-3-5-sonnet",
+                context_length=200000,
+                input_price=3.0,
+                output_price=15.0,
+            )
+        )
+        await session.commit()
+
+        inherited_parent = {
+            "provider_type": "openai",
+            "base_url": "https://parent.example.com",
+            "api_key": "parent-key",
+            "model_id": "gpt-parent",
+            "max_context_tokens": 8000,
+            "input_price": 1.0,
+            "output_price": 2.0,
+            "reasoning_effort": "high",
+        }
+        parent_snapshot = dict(inherited_parent)
+
+        # Case 1: Parent High + subagent inherit -> child model info with reasoning_effort="high"
+        resolved_inherit = await _resolve_agent_model_config(
+            session,
+            configured_model_id="model-child",
+            inherited_config=inherited_parent,
+            configured_reasoning_effort="inherit",
+        )
+        assert inherited_parent == parent_snapshot
+        assert resolved_inherit["model_id"] == "claude-3-5-sonnet"
+        assert resolved_inherit["provider_type"] == "anthropic"
+        assert resolved_inherit["base_url"] == "https://child.example.com"
+        assert resolved_inherit["api_key"] == "child-key"
+        assert resolved_inherit["max_context_tokens"] == 200000
+        assert resolved_inherit["input_price"] == 3.0
+        assert resolved_inherit["output_price"] == 15.0
+        assert resolved_inherit["reasoning_effort"] == "high"
+
+        # Case 2: Parent High + subagent off -> child model info with reasoning_effort removed
+        resolved_off = await _resolve_agent_model_config(
+            session,
+            configured_model_id="model-child",
+            inherited_config=inherited_parent,
+            configured_reasoning_effort="off",
+        )
+        assert resolved_off["model_id"] == "claude-3-5-sonnet"
+        assert "reasoning_effort" not in resolved_off
+
+        # Case 3: Parent High + subagent medium -> child model info with reasoning_effort="medium"
+        resolved_medium = await _resolve_agent_model_config(
+            session,
+            configured_model_id="model-child",
+            inherited_config=inherited_parent,
+            configured_reasoning_effort="medium",
+        )
+        assert resolved_medium["model_id"] == "claude-3-5-sonnet"
+        assert resolved_medium["reasoning_effort"] == "medium"
+
+        # Case 4: Parent no effort + subagent high -> child model info with reasoning_effort="high"
+        inherited_no_effort = dict(inherited_parent)
+        del inherited_no_effort["reasoning_effort"]
+        resolved_high = await _resolve_agent_model_config(
+            session,
+            configured_model_id="model-child",
+            inherited_config=inherited_no_effort,
+            configured_reasoning_effort="high",
+        )
+        assert resolved_high["model_id"] == "claude-3-5-sonnet"
+        assert resolved_high["reasoning_effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_resolve_agent_model_config_fallback_on_model_resolution_failure(
+    db_session_factory,
+):
+    from app.agent_runtime.runner.subagent_runner import _resolve_agent_model_config
+
+    inherited_high = {
+        "provider_type": "openai",
+        "base_url": "",
+        "api_key": "parent-key",
+        "model_id": "model-parent",
+        "max_context_tokens": 8000,
+        "reasoning_effort": "high",
+    }
+
+    async with db_session_factory() as session:
+        resolved_off = await _resolve_agent_model_config(
+            session,
+            configured_model_id="non-existent-model-id",
+            inherited_config=inherited_high,
+            configured_reasoning_effort="off",
+        )
+        assert resolved_off["model_id"] == "model-parent"
+        assert "reasoning_effort" not in resolved_off
+
+        resolved_medium = await _resolve_agent_model_config(
+            session,
+            configured_model_id="non-existent-model-id",
+            inherited_config=inherited_high,
+            configured_reasoning_effort="medium",
+        )
+        assert resolved_medium["model_id"] == "model-parent"
+        assert resolved_medium["reasoning_effort"] == "medium"
+
+        inherited_no_effort = {
+            "provider_type": "openai",
+            "base_url": "",
+            "api_key": "parent-key",
+            "model_id": "model-parent",
+            "max_context_tokens": 8000,
+        }
+        resolved_high = await _resolve_agent_model_config(
+            session,
+            configured_model_id="non-existent-model-id",
+            inherited_config=inherited_no_effort,
+            configured_reasoning_effort="high",
+        )
+        assert resolved_high["model_id"] == "model-parent"
+        assert resolved_high["reasoning_effort"] == "high"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_key", "db_reasoning_effort", "parent_effort", "expected_model_config_effort"),
+    [
+        ("writer", "inherit", "high", "high"),
+        ("writer", "off", "high", None),
+        ("writer", "medium", "high", "medium"),
+        ("writer", "high", None, "high"),
+        ("reviewer", "off", "high", None),
+        ("explore", "inherit", "high", "high"),
+        ("composer", "low", "high", "low"),
+        ("auditor", "max", None, "max"),
+        ("actor", "xhigh", "high", "xhigh"),
+    ],
+)
+async def test_subagent_runner_run_reasoning_effort_e2e(
+    db_session_factory,
+    monkeypatch,
+    agent_key: str,
+    db_reasoning_effort: str,
+    parent_effort: str | None,
+    expected_model_config_effort: str | None,
+):
+    from app.agent_runtime.persistence.model import AgentDefinitionRecord
+    from app.agent_runtime.runner.subagent_runner import SubagentRunner
+    from app.models.clients.model_factory import ModelConfig
+
+    async with db_session_factory() as session:
+        session.add(
+            AgentDefinitionRecord(
+                key=agent_key,
+                display_name=agent_key.capitalize(),
+                description="",
+                kind="subagent",
+                prompt_agent_name=agent_key,
+                model_id=None,
+                reasoning_effort=db_reasoning_effort,
+                enabled=True,
+                source="builtin",
+            )
+        )
+        row = await create_child_run(
+            session,
+            parent_session_id="parent-session",
+            parent_task_id="task-1",
+            parent_thread_id="parent-session",
+            child_thread_id=f"child-thread-{agent_key}-{db_reasoning_effort}",
+            agent_key=agent_key,
+            dispatch_id="dispatch-test",
+            tool_call_id="tool-call-test",
+            request={"task": "write", "input": {}},
+        )
+
+    captured_configs: list[ModelConfig] = []
+
+    def fake_create_chat_model(config: ModelConfig):
+        captured_configs.append(config)
+        return object()
+
+    class FakeGraph:
+        async def astream_events(self, initial_state, config=None, version=None):
+            yield {
+                "event": "on_chain_end",
+                "data": {
+                    "output": {
+                        "messages": [AIMessage(content="subagent output")],
+                        "iteration_count": 1,
+                        "is_done": True,
+                        "final_output": None,
+                    }
+                },
+            }
+
+        async def ainvoke(self, initial_state, config=None):
+            return {
+                "messages": [AIMessage(content="subagent output")],
+                "iteration_count": 1,
+                "is_done": True,
+                "final_output": None,
+            }
+
+    monkeypatch.setattr(
+        "app.agent_runtime.runner.subagent_runner.create_chat_model",
+        fake_create_chat_model,
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.runner.subagent_runner.create_react_agent",
+        lambda *_args, **_kwargs: FakeGraph(),
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.runner.subagent_runner.emit",
+        AsyncMock(),
+    )
+
+    parent_model_config = {
+        "provider_type": "openai",
+        "base_url": "",
+        "api_key": "key",
+        "model_id": "gpt-parent",
+        "max_context_tokens": 8000,
+    }
+    if parent_effort is not None:
+        parent_model_config["reasoning_effort"] = parent_effort
+    parent_snapshot = dict(parent_model_config)
+
+    runner = SubagentRunner(
+        session_factory=db_session_factory,
+        model_config=parent_model_config,
+        project_id="project-1",
+    )
+    await runner.run(row.id)
+
+    assert runner.model_config == parent_snapshot, "parent model_config must not be modified"
+    assert len(captured_configs) == 1
+    actual_config = captured_configs[0]
+
+    assert isinstance(actual_config, ModelConfig)
+    assert actual_config.reasoning_effort != "inherit"
+    assert actual_config.reasoning_effort != "off"
+    assert actual_config.reasoning_effort == expected_model_config_effort
+
+
+@pytest.mark.asyncio
+async def test_subagent_runner_run_custom_subagent_switched_model_and_effort(
+    db_session_factory,
+    monkeypatch,
+):
+    from app.agent_runtime.persistence.model import AgentDefinitionRecord
+    from app.agent_runtime.runner.subagent_runner import SubagentRunner
+    from app.core.encryption import EncryptionService
+    from app.models.clients.model_factory import ModelConfig
+    from app.models.entities.model import Model
+    from app.models.entities.model_provider import ModelProvider
+    from app.settings import settings
+
+    api_key = EncryptionService(settings.encryption_key).encrypt("custom-key")
+
+    async with db_session_factory() as session:
+        session.add(
+            ModelProvider(
+                id="provider-custom",
+                url="https://custom.example.com",
+                api_key_encrypted=api_key,
+                provider_type="mistral",
+            )
+        )
+        session.add(
+            Model(
+                id="model-custom-rec",
+                name="Custom Model",
+                provider_id="provider-custom",
+                model_id="mistral-large-2411",
+                context_length=128000,
+                input_price=2.0,
+                output_price=6.0,
+            )
+        )
+        session.add(
+            AgentDefinitionRecord(
+                key="custom_researcher",
+                display_name="Custom Researcher",
+                description="Custom subagent",
+                kind="subagent",
+                prompt_agent_name="custom_researcher",
+                model_id="model-custom-rec",
+                reasoning_effort="high",
+                enabled=True,
+                source="custom",
+            )
+        )
+        row = await create_child_run(
+            session,
+            parent_session_id="parent-session",
+            parent_task_id="task-1",
+            parent_thread_id="parent-session",
+            child_thread_id="child-thread-custom-researcher",
+            agent_key="custom_researcher",
+            dispatch_id="dispatch-custom",
+            tool_call_id="tool-call-custom",
+            request={"task": "research", "input": {}},
+        )
+
+    captured_configs: list[ModelConfig] = []
+
+    def fake_create_chat_model(config: ModelConfig):
+        captured_configs.append(config)
+        return object()
+
+    class FakeGraph:
+        async def astream_events(self, initial_state, config=None, version=None):
+            yield {
+                "event": "on_chain_end",
+                "data": {
+                    "output": {
+                        "messages": [AIMessage(content="research done")],
+                        "iteration_count": 1,
+                        "is_done": True,
+                        "final_output": None,
+                    }
+                },
+            }
+
+        async def ainvoke(self, initial_state, config=None):
+            return {
+                "messages": [AIMessage(content="research done")],
+                "iteration_count": 1,
+                "is_done": True,
+                "final_output": None,
+            }
+
+    monkeypatch.setattr(
+        "app.agent_runtime.runner.subagent_runner.create_chat_model",
+        fake_create_chat_model,
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.runner.subagent_runner.create_react_agent",
+        lambda *_args, **_kwargs: FakeGraph(),
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.runner.subagent_runner.emit",
+        AsyncMock(),
+    )
+
+    parent_model_config = {
+        "provider_type": "openai",
+        "base_url": "",
+        "api_key": "parent-key",
+        "model_id": "gpt-parent",
+        "max_context_tokens": 8000,
+        "input_price": 1.0,
+        "output_price": 2.0,
+        "reasoning_effort": "low",
+    }
+    parent_snapshot = dict(parent_model_config)
+
+    runner = SubagentRunner(
+        session_factory=db_session_factory,
+        model_config=parent_model_config,
+        project_id="project-1",
+    )
+    await runner.run(row.id)
+
+    assert runner.model_config == parent_snapshot, "parent model_config must not be modified"
+    assert len(captured_configs) == 1
+    actual_config = captured_configs[0]
+    assert actual_config.provider_type == "mistral"
+    assert actual_config.model_id == "mistral-large-2411"
+    assert actual_config.base_url == "https://custom.example.com"
+    assert actual_config.api_key == "custom-key"
+    assert actual_config.max_context_tokens == 128000
+    assert actual_config.reasoning_effort == "high"
+    assert actual_config.reasoning_effort != "inherit"
+

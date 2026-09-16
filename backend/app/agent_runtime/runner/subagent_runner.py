@@ -15,8 +15,11 @@ from app.agent_runtime.agents.definitions import (
     load_agent_definition,
 )
 from app.agent_runtime.agents.model_policy import (
+    DEFAULT_AGENT_REASONING_EFFORT,
     SYSTEM_DEFAULT_MODEL_REFERENCE,
     SYSTEM_LIGHT_MODEL_REFERENCE,
+    AgentReasoningEffort,
+    apply_agent_reasoning_policy,
 )
 from app.audit import AuditContext
 from app.agent_runtime.agents.tool_categories import get_tool_names_for_categories
@@ -237,6 +240,7 @@ async def _resolve_agent_model_config(
     *,
     configured_model_id: str | None,
     inherited_config: dict[str, Any],
+    configured_reasoning_effort: AgentReasoningEffort = DEFAULT_AGENT_REASONING_EFFORT,
 ) -> dict[str, Any]:
     """Resolve the model config a subagent should use.
 
@@ -244,6 +248,9 @@ async def _resolve_agent_model_config(
     model record, the provider, base_url, api_key and real ``model_id`` are
     resolved from that record. When nothing is configured, the inherited
     parent model config is returned unchanged.
+
+    The subagent's ``reasoning_effort`` policy is then resolved against the
+    active config using ``apply_agent_reasoning_policy``.
     """
     record_id = await _resolve_model_record_id(
         session,
@@ -255,8 +262,8 @@ async def _resolve_agent_model_config(
             reasoning_effort = inherited_config.get("reasoning_effort")
             if isinstance(reasoning_effort, str):
                 resolved["reasoning_effort"] = reasoning_effort
-            return resolved
-    return dict(inherited_config)
+            return apply_agent_reasoning_policy(resolved, configured_reasoning_effort)
+    return apply_agent_reasoning_policy(inherited_config, configured_reasoning_effort)
 
 
 def _extract_interrupts(result_state: dict[str, Any]) -> list[Any]:
@@ -439,10 +446,14 @@ class SubagentRunner:
             model_config = await _resolve_agent_model_config(
                 session,
                 configured_model_id=definition.model_id,
+                configured_reasoning_effort=getattr(
+                    definition, "reasoning_effort", DEFAULT_AGENT_REASONING_EFFORT
+                ),
                 inherited_config=model_config,
             )
         finally:
             await _close_session(session)
+        runtime_state["model_config"] = model_config
         model = create_chat_model(ModelConfig(**to_client_model_config(model_config)))
         graph = create_react_agent(
             agent_config,
