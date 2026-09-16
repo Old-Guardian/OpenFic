@@ -132,12 +132,15 @@ async function setupAgentMockRoutes(
     onUpdate?: (body: unknown) => void;
     onCreate?: (body: unknown) => void;
     onReset?: () => void;
+    onCreateSession?: (body: unknown) => void;
+    onSendMessage?: (body: unknown) => void;
   },
 ) {
   const definitions = options?.definitions ?? createMockDefinitions();
 
   // 注入 Socket 立即就绪 Mock，防止 main.tsx 在 30 秒握手超时前阻塞在全局 Loading
   await page.addInitScript(() => {
+    const eventListeners: Record<string, Function[]> = {};
     const fakeSocket: any = {
       connected: true,
       active: true,
@@ -146,12 +149,44 @@ async function setupAgentMockRoutes(
         on: () => fakeSocket.io,
         off: () => fakeSocket.io,
       },
-      on: () => fakeSocket,
-      off: () => fakeSocket,
-      once: () => fakeSocket,
-      emit: () => fakeSocket,
+      on: (event: string, fn: Function) => {
+        if (!eventListeners[event]) eventListeners[event] = [];
+        eventListeners[event].push(fn);
+        return fakeSocket;
+      },
+      off: (event: string, fn: Function) => {
+        if (eventListeners[event]) {
+          eventListeners[event] = eventListeners[event].filter((f) => f !== fn);
+        }
+        return fakeSocket;
+      },
+      once: (event: string, fn: Function) => {
+        const wrapper = (...args: any[]) => {
+          fakeSocket.off(event, wrapper);
+          fn(...args);
+        };
+        fakeSocket.on(event, wrapper);
+        return fakeSocket;
+      },
+      emit: (event: string, data: any) => {
+        if (event === "agent:join" && data?.session_id) {
+          setTimeout(() => {
+            eventListeners["agent:joined"]?.forEach((fn) => fn({ session_id: data.session_id }));
+          }, 0);
+        }
+        if (event === "subagent:join_status") {
+          setTimeout(() => {
+            eventListeners["subagent:joined_status"]?.forEach((fn) => fn({ session_id: data?.session_id }));
+          }, 0);
+        }
+        return fakeSocket;
+      },
       connect: () => fakeSocket,
       disconnect: () => fakeSocket,
+    };
+
+    (window as any).__emitFakeSocketEvent = (event: string, data: any) => {
+      eventListeners[event]?.forEach((fn) => fn(data));
     };
 
     let currentUrl: string | undefined = undefined;
@@ -420,11 +455,156 @@ async function setupAgentMockRoutes(
     });
   });
 
-  await page.route("**/api/v1/projects*", async (route) => {
+  await page.route(/\/api\/v1\/projects(\?.*)?$/, async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify([]),
+      body: JSON.stringify([
+        {
+          id: "proj-1",
+          title: "测试小说",
+          word_count: 0,
+          chapter_count: 0,
+          volume_count: 0,
+          status: "draft",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ]),
+    });
+  });
+
+  await page.route("**/api/v1/projects/**", async (route) => {
+    const url = route.request().url();
+    if (url.includes("/volumes")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ volumes: [] }) });
+    } else if (url.includes("/summaries")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ maintenance: null }) });
+    } else if (url.includes("/tasks")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [], total: 0 }) });
+    } else if (url.includes("/world-info")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ items: [] }) });
+    } else if (url.includes("/notes")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ root_notes: [], categories: [], total_notes: 0 }) });
+    } else if (url.includes("/characters")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ characters: [] }) });
+    } else if (url.includes("/chapters")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    } else if (url.includes("/retrieval")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "idle", progress: 0, total: 0 }) });
+    } else if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "proj-1",
+          title: "测试小说",
+          word_count: 0,
+          chapter_count: 0,
+          volume_count: 0,
+          status: "draft",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }),
+      });
+    } else {
+      await route.continue();
+    }
+  });
+
+  await page.route("**/api/v1/agent/sessions/*/join", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ success: true }) });
+  });
+
+  await page.route("**/api/v1/agent/sessions/*/message", async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON();
+      options?.onSendMessage?.(body);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ success: true, model_updated: true, queued: false }),
+      });
+      // 模拟 Agent 执行完成，触发 agent:done 恢复 idle 状态
+      const url = route.request().url();
+      const match = url.match(/\/sessions\/([^/]+)\/message/);
+      const sessionId = match ? match[1] : undefined;
+      page
+        .evaluate((targetSessionId) => {
+          (window as any).__emitFakeSocketEvent?.("agent:done", {
+            session_id: targetSessionId,
+            created_at: new Date().toISOString(),
+          });
+        }, sessionId)
+        .catch(() => undefined);
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.route("**/api/v1/agent/sessions/*/changes", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        session_id: "sess-mock-1",
+        turns: [],
+        session_changes: { itemCount: 0, added: 0, removed: 0, items: [] },
+      }),
+    });
+  });
+
+  await page.route("**/api/v1/agent/sessions/*/subagents", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+  });
+
+  await page.route("**/api/v1/agent/sessions/*/state", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ is_running: false, state: {} }),
+    });
+  });
+
+  await page.route("**/api/v1/agent/sessions", async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON();
+      options?.onCreateSession?.(body);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          session_id: "sess-mock-1",
+          task_id: "task-mock-1",
+          task_title: "新任务",
+          status: "idle",
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.route("**/api/v1/tasks/*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "task-mock-1",
+        projectId: "proj-1",
+        title: "新任务",
+        tokenInput: 0,
+        tokenOutput: 0,
+        tokenCache: 0,
+        cost: 0,
+        contextInputTokens: 0,
+        isRunning: false,
+        isFavorited: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        agentSessionId: "sess-mock-1",
+        messages: [],
+      }),
     });
   });
 }
@@ -747,5 +927,123 @@ test.describe("智能体思考强度配置：UI 与设置页面联调", () => {
     // 保存按钮禁用
     const saveButton = page.locator(".agent-definition-form").getByRole("button", { name: "保存" });
     await expect(saveButton).toBeDisabled();
+  });
+
+  test("9. 在聊天侧选择 Build，确认无会话覆盖时请求采用 Build 默认值（省略 model_id 与 reasoning_effort）", async ({ page }) => {
+    let capturedCreateSession: any = null;
+    await setupAgentMockRoutes(page, {
+      onCreateSession: (body) => {
+        capturedCreateSession = body;
+      },
+    });
+
+    await page.goto("/projects/proj-1");
+    await expect(page.locator(".global-loading-container, .global-loading-fallback")).toBeHidden({
+      timeout: 15000,
+    });
+
+    // 确认主智能体显示为 Build
+    const agentTrigger = page.locator(".ai-sidebar-agent-select-trigger");
+    await expect(agentTrigger).toBeVisible({ timeout: 15000 });
+    await expect(agentTrigger).toHaveText("Build");
+
+    // 输入消息并发送
+    const composer = page.locator(".ai-sidebar-input-body[data-mode='composer'] p").first();
+    await expect(composer).toBeVisible();
+    await composer.click();
+    await composer.fill("测试新会话");
+
+    const sendButton = page.locator(".ai-sidebar-send-button");
+    await expect(sendButton).toBeEnabled();
+    await sendButton.click();
+
+    // 验证请求体：无手动覆盖时，不传 model_id 和 reasoning_effort（F2: inherit 时不补默认）
+    await expect(() => {
+      expect(capturedCreateSession).toBeTruthy();
+      expect(capturedCreateSession.agent_key).toBe("build");
+      expect(capturedCreateSession.model_id).toBeUndefined();
+      expect(capturedCreateSession.reasoning_effort).toBeUndefined();
+    }).toPass();
+  });
+
+  test("10. 手动改为 Low，确认当前会话后续请求为 Low；新建会话后恢复 Build 默认值", async ({ page }) => {
+    let capturedCreateSession: any = null;
+    let capturedSendMessage: any = null;
+    await setupAgentMockRoutes(page, {
+      onCreateSession: (body) => {
+        capturedCreateSession = body;
+      },
+      onSendMessage: (body) => {
+        capturedSendMessage = body;
+      },
+    });
+
+    await page.goto("/projects/proj-1");
+    await expect(page.locator(".global-loading-container, .global-loading-fallback")).toBeHidden({
+      timeout: 15000,
+    });
+
+    // 确认主智能体显示为 Build
+    const agentTrigger = page.locator(".ai-sidebar-agent-select-trigger");
+    await expect(agentTrigger).toBeVisible({ timeout: 15000 });
+    await expect(agentTrigger).toHaveText("Build");
+
+    // 初始状态输入并发送第一条消息以建立会话
+    const editor = page.locator('.ai-sidebar-input-body[data-mode="composer"] [contenteditable="true"]').first();
+    await expect(editor).toBeVisible({ timeout: 15000 });
+    await editor.click();
+    await page.keyboard.type("第一条消息");
+
+    const sendButton = page.locator(".ai-sidebar-send-button");
+    await expect(sendButton).toBeEnabled();
+    await sendButton.click();
+
+    await expect(() => {
+      expect(capturedCreateSession).toBeTruthy();
+    }).toPass();
+
+    // 手动将思考强度下拉框切换为“低”
+    const reasoningTrigger = page.locator(".ai-sidebar-reasoning-effort-trigger");
+    await expect(reasoningTrigger).toBeVisible();
+    await reasoningTrigger.click();
+
+    const lowOption = page.getByRole("option", { name: "Low", exact: true });
+    await expect(lowOption).toBeVisible();
+    await lowOption.click();
+
+    // 发送第二条消息（会话内后续请求）
+    capturedSendMessage = null;
+    await editor.click();
+    await page.keyboard.type("第二条消息");
+    await expect(sendButton).toBeEnabled();
+    await sendButton.click();
+
+    // 验证第二条消息请求体中带上了 reasoning_effort: "low"
+    await expect(() => {
+      expect(capturedSendMessage).toBeTruthy();
+      expect(capturedSendMessage.reasoning_effort).toBe("low");
+    }).toPass();
+
+    // 点击新建任务按钮重置会话
+    capturedCreateSession = null;
+    const newTaskBtn = page
+      .locator(
+        'button[aria-label="新建任务"], button[aria-label="New Task"], button[aria-label="返回任务列表"], button[aria-label="Back to tasks"], .ai-sidebar-header-back-button',
+      )
+      .first();
+    await expect(newTaskBtn).toBeVisible();
+    await newTaskBtn.click();
+
+    // 在新会话中发送消息
+    await editor.click();
+    await page.keyboard.type("新会话消息");
+    await expect(sendButton).toBeEnabled();
+    await sendButton.click();
+
+    // 验证新会话中思考强度恢复智能体默认值（不带会话覆盖，即 undefined）
+    await expect(() => {
+      expect(capturedCreateSession).toBeTruthy();
+      expect(capturedCreateSession.reasoning_effort).toBeUndefined();
+    }).toPass();
   });
 });

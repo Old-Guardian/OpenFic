@@ -247,8 +247,10 @@ function buildPendingInterruptMessages(interrupts: Record<string, unknown>[]): A
 
 interface UseAgentSessionOptions {
   projectId: string;
-  modelId: string;
+  modelId?: string;
   reasoningEffort?: ReasoningEffort;
+  modelOverride?: string | null;
+  reasoningEffortOverride?: ReasoningEffort | null;
   agentKey?: string;
   maxIterations?: number;
   onTokenUsage?: (sessionId: string, usage: TokenUsageState) => void;
@@ -276,6 +278,8 @@ export function useAgentSession({
   projectId,
   modelId,
   reasoningEffort,
+  modelOverride,
+  reasoningEffortOverride,
   agentKey,
   maxIterations = 5,
   onTokenUsage,
@@ -295,6 +299,8 @@ export function useAgentSession({
   const suppressSocketEventsAfterAbortRef = useRef(false);
   const sessionIdRef = useRef<string | null>(null);
   const activeModelIdRef = useRef<string | null>(null);
+  const activeModelOverrideRef = useRef<string | null | undefined>(undefined);
+  const activeReasoningOverrideRef = useRef<ReasoningEffort | null | undefined>(undefined);
   const pendingMessageRef = useRef<AgentPendingMessage | null>(null);
   const isCompactingRef = useRef(false);
   const manualCompactionPreviousStateRef = useRef<Pick<
@@ -874,8 +880,12 @@ export function useAgentSession({
 
         const createResponse = await createAgentSession({
           project_id: projectId,
-          model_id: modelId,
-          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+          ...(modelOverride !== undefined && modelOverride !== null
+            ? { model_id: modelOverride }
+            : {}),
+          ...(reasoningEffortOverride !== undefined && reasoningEffortOverride !== null
+            ? { reasoning_effort: reasoningEffortOverride }
+            : {}),
           max_iterations: maxIterations,
           ...(agentKey ? { agent_key: agentKey } : {}),
         });
@@ -883,7 +893,9 @@ export function useAgentSession({
         if (projectIdRef.current !== projectId) return;
         onSessionCreated?.(createResponse);
         sessionIdRef.current = createResponse.session_id;
-        activeModelIdRef.current = modelId;
+        activeModelIdRef.current = modelId ?? null;
+        activeModelOverrideRef.current = modelOverride;
+        activeReasoningOverrideRef.current = reasoningEffortOverride;
         setSessionId(createResponse.session_id);
         queryClient.invalidateQueries({ queryKey: ["tasks", projectId], exact: false });
         attachAgentSocket(createResponse.session_id);
@@ -924,10 +936,11 @@ export function useAgentSession({
       commitTranscriptState,
       maxIterations,
       modelId,
+      modelOverride,
       onSessionCreated,
       projectId,
       queryClient,
-      reasoningEffort,
+      reasoningEffortOverride,
       updateTranscriptState,
     ],
   );
@@ -980,16 +993,35 @@ export function useAgentSession({
           attachment.uploadedAttachment ? [attachment.uploadedAttachment] : [],
         );
         const messageAttachments = [...(existingAttachments ?? []), ...(uploadedAttachments ?? [])];
-        const nextModelId = modelId === activeModelIdRef.current ? undefined : modelId;
+        const nextModelId =
+          activeModelOverrideRef.current === undefined
+            ? (modelOverride !== undefined && modelOverride !== null ? modelOverride : undefined)
+            : modelOverride !== activeModelOverrideRef.current
+              ? (modelOverride ?? null)
+              : undefined;
+
+        const nextReasoningEffort =
+          activeReasoningOverrideRef.current === undefined
+            ? (reasoningEffortOverride !== undefined && reasoningEffortOverride !== null
+                ? reasoningEffortOverride
+                : undefined)
+            : reasoningEffortOverride !== activeReasoningOverrideRef.current
+              ? (reasoningEffortOverride ?? null)
+              : undefined;
+
         const response = await sendAgentMessage(
           activeSessionId,
           message,
           nextModelId,
-          reasoningEffort,
+          nextReasoningEffort,
           agentKey,
           messageAttachments.length > 0 ? messageAttachments : undefined,
         );
-        if (response.model_updated && nextModelId) activeModelIdRef.current = nextModelId;
+        if (response.model_updated) {
+          activeModelIdRef.current = modelId ?? null;
+          activeModelOverrideRef.current = modelOverride;
+          activeReasoningOverrideRef.current = reasoningEffortOverride;
+        }
         if (response.queued && response.pending_message) {
           syncPendingMessageState(createPendingUserMessage(response.pending_message));
         }
@@ -1011,7 +1043,8 @@ export function useAgentSession({
       agentKey,
       attachAgentSocket,
       modelId,
-      reasoningEffort,
+      modelOverride,
+      reasoningEffortOverride,
       sessionId,
       syncPendingMessageState,
       updateTranscriptState,
@@ -1252,6 +1285,8 @@ export function useAgentSession({
   const resetSession = useCallback(() => {
     sessionIdRef.current = null;
     activeModelIdRef.current = null;
+    activeModelOverrideRef.current = undefined;
+    activeReasoningOverrideRef.current = undefined;
     suppressSocketEventsAfterAbortRef.current = false;
     transportRetryAttemptRef.current = 0;
     suppressNextErrorAfterCompactionErrorRef.current = false;
@@ -1343,6 +1378,8 @@ export function useAgentSession({
     ) => {
       sessionIdRef.current = existingSessionId;
       activeModelIdRef.current = null;
+      activeModelOverrideRef.current = modelOverride;
+      activeReasoningOverrideRef.current = reasoningEffortOverride;
       suppressSocketEventsAfterAbortRef.current = false;
       transportRetryAttemptRef.current = 0;
       suppressNextErrorAfterCompactionErrorRef.current = false;
@@ -1420,6 +1457,8 @@ export function useAgentSession({
       agentKey,
       attachAgentSocket,
       commitTranscriptState,
+      modelOverride,
+      reasoningEffortOverride,
       syncCompactingState,
       syncPendingMessageState,
     ],

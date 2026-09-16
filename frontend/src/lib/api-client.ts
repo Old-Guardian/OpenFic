@@ -2552,15 +2552,15 @@ export async function cancelSubagentSession(
 export async function sendAgentMessage(
   sessionId: string,
   message: string,
-  modelId?: string,
-  reasoningEffort?: ReasoningEffort,
+  modelId?: string | null,
+  reasoningEffort?: ReasoningEffort | null,
   agentKey?: string,
   attachments?: AgentImageAttachment[],
 ): Promise<AgentSendMessageResponse> {
   const request: AgentSendMessageRequest = {
     message,
-    ...(modelId ? { model_id: modelId } : {}),
-    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+    ...(modelId !== undefined ? { model_id: modelId } : {}),
+    ...(reasoningEffort !== undefined ? { reasoning_effort: reasoningEffort } : {}),
     ...(agentKey ? { agent_key: agentKey } : {}),
     ...(attachments?.length ? { attachments: attachments.map((attachment) => attachment.id) } : {}),
   };

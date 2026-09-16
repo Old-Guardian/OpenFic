@@ -15,7 +15,10 @@ class AgentSessionCreateRequest(BaseModel):
     """创建 Agent 会话请求。"""
 
     project_id: str = Field(..., description="项目ID")
-    model_id: str = Field(..., description="模型ID")
+    model_id: str | None = Field(
+        default=None,
+        description="模型ID，省略或为 None 时使用主智能体默认配置",
+    )
     max_iterations: int = Field(
         default=DEFAULT_AGENT_MAX_ITERATIONS,
         ge=1,

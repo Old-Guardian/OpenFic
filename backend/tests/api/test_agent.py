@@ -4240,3 +4240,288 @@ class TestAgentAPI:
         resolve_model_config.assert_awaited_once_with(session, "model-fork", "high")
         fork_task = await session.get(Task, data["task_id"])
         assert fork_task is not None
+
+    async def test_create_agent_session_without_model_id_uses_agent_default(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        target = await _seed_agent_target(client)
+        update_res = await client.put(
+            "/api/v1/settings",
+            json={"default_model": target["model_id"]},
+        )
+        assert update_res.status_code == status.HTTP_200_OK
+
+        session_response = await client.post(
+            "/api/v1/agent/sessions",
+            json={
+                "project_id": target["project_id"],
+                "agent_key": "build",
+            },
+        )
+        assert session_response.status_code == status.HTTP_200_OK
+        session_id = session_response.json()["session_id"]
+        assert session_id in _SESSION_RUNNERS
+        runner = _SESSION_RUNNERS[session_id]
+        assert runner.model_config.get("model_id") == "gpt-3.5-turbo"
+
+    async def test_create_agent_session_inherit_does_not_backfill_default(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        target = await _seed_agent_target(client)
+        await client.put(
+            "/api/v1/settings",
+            json={"default_model": target["model_id"]},
+        )
+
+        session_response = await client.post(
+            "/api/v1/agent/sessions",
+            json={
+                "project_id": target["project_id"],
+                "agent_key": "build",
+            },
+        )
+        assert session_response.status_code == status.HTTP_200_OK
+        session_id = session_response.json()["session_id"]
+        runner = _SESSION_RUNNERS[session_id]
+        assert "reasoning_effort" not in runner.model_config or runner.model_config["reasoning_effort"] is None
+
+    async def test_create_agent_session_session_effort_overrides_agent_default(
+        self,
+        client: AsyncClient,
+        isolated_prompts_dir: Path,
+    ) -> None:
+        target = await _seed_agent_target(client)
+        custom_agent_body = {
+            "key": "custom-planner",
+            "display_name": "Custom Planner",
+            "description": "Plan with low effort",
+            "kind": "primary",
+            "prompt_agent_name": "build",
+            "model_id": target["model_id"],
+            "reasoning_effort": "low",
+            "enabled_tool_categories": ["chapter_read"],
+            "enabled_skills": [],
+            "metadata": {},
+        }
+        res = await client.post("/api/v1/agent-definitions", json=custom_agent_body)
+        assert res.status_code == status.HTTP_201_CREATED
+
+        # 1. Without session override -> adopts agent definition "low"
+        res1 = await client.post(
+            "/api/v1/agent/sessions",
+            json={
+                "project_id": target["project_id"],
+                "agent_key": "custom-planner",
+            },
+        )
+        assert res1.status_code == status.HTTP_200_OK
+        runner1 = _SESSION_RUNNERS[res1.json()["session_id"]]
+        assert runner1.model_config.get("reasoning_effort") == "low"
+
+        # 2. With session override "high" -> overrides agent definition
+        res2 = await client.post(
+            "/api/v1/agent/sessions",
+            json={
+                "project_id": target["project_id"],
+                "agent_key": "custom-planner",
+                "reasoning_effort": "high",
+            },
+        )
+        assert res2.status_code == status.HTTP_200_OK
+        runner2 = _SESSION_RUNNERS[res2.json()["session_id"]]
+        assert runner2.model_config.get("reasoning_effort") == "high"
+
+    async def test_create_agent_session_unresolvable_model_returns_404(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        target = await _seed_agent_target(client)
+        await client.put(
+            "/api/v1/settings",
+            json={"default_model": ""},
+        )
+        session_response = await client.post(
+            "/api/v1/agent/sessions",
+            json={
+                "project_id": target["project_id"],
+                "agent_key": "build",
+            },
+        )
+        assert session_response.status_code == status.HTTP_404_NOT_FOUND
+
+    async def test_send_agent_message_override_and_explicit_null_clears_override(
+        self,
+        client: AsyncClient,
+        isolated_prompts_dir: Path,
+    ) -> None:
+        target = await _seed_agent_target(client)
+        second_model = await client.post(
+            "/api/v1/models",
+            json={
+                "name": "模型2",
+                "provider_id": target["provider_id"],
+                "model_id": "gpt-4o",
+                "temperature": 0.5,
+                "max_tokens": 4000,
+                "context_length": 16000,
+            },
+        )
+        assert second_model.status_code == 201
+        second_model_id = second_model.json()["id"]
+
+        custom_agent_body = {
+            "key": "custom-agent-override",
+            "display_name": "Agent Override",
+            "description": "Agent with low effort",
+            "kind": "primary",
+            "prompt_agent_name": "build",
+            "model_id": target["model_id"],
+            "reasoning_effort": "low",
+            "enabled_tool_categories": ["chapter_read"],
+            "enabled_skills": [],
+            "metadata": {},
+        }
+        await client.post("/api/v1/agent-definitions", json=custom_agent_body)
+
+        session_res = await client.post(
+            "/api/v1/agent/sessions",
+            json={
+                "project_id": target["project_id"],
+                "agent_key": "custom-agent-override",
+            },
+        )
+        assert session_res.status_code == status.HTTP_200_OK
+        session_id = session_res.json()["session_id"]
+        runner = _SESSION_RUNNERS[session_id]
+        assert runner.model_config.get("reasoning_effort") == "low"
+        assert runner.model_config.get("model_id") == "gpt-3.5-turbo"
+
+        with patch("app.agent_runtime.runner.session_runner.SessionRunner.run", AsyncMock()):
+            # 1. Override reasoning_effort to "high" and model to second_model_id
+            send_res1 = await client.post(
+                f"/api/v1/agent/sessions/{session_id}/message",
+                json={
+                    "message": "hello",
+                    "model_id": second_model_id,
+                    "reasoning_effort": "high",
+                },
+            )
+            assert send_res1.status_code == status.HTTP_200_OK
+            assert send_res1.json()["model_updated"] is True
+            assert runner.model_config.get("reasoning_effort") == "high"
+            assert runner.model_config.get("model_id") == "gpt-4o"
+
+            # 2. Send message without model_id or reasoning_effort -> should stay overridden
+            send_res2 = await client.post(
+                f"/api/v1/agent/sessions/{session_id}/message",
+                json={"message": "hello 2"},
+            )
+            assert send_res2.status_code == status.HTTP_200_OK
+            assert runner.model_config.get("reasoning_effort") == "high"
+            assert runner.model_config.get("model_id") == "gpt-4o"
+
+            # 3. Explicit null for reasoning_effort -> clears override and falls back to agent default ("low")
+            send_res3 = await client.post(
+                f"/api/v1/agent/sessions/{session_id}/message",
+                json={
+                    "message": "hello 3",
+                    "reasoning_effort": None,
+                },
+            )
+            assert send_res3.status_code == status.HTTP_200_OK
+            assert runner.model_config.get("reasoning_effort") == "low"
+            assert runner.model_config.get("model_id") == "gpt-4o"
+
+            # 4. Explicit null for model_id -> clears override and falls back to agent default (gpt-3.5-turbo)
+            send_res4 = await client.post(
+                f"/api/v1/agent/sessions/{session_id}/message",
+                json={
+                    "message": "hello 4",
+                    "model_id": None,
+                },
+            )
+            assert send_res4.status_code == status.HTTP_200_OK
+            assert runner.model_config.get("model_id") == "gpt-3.5-turbo"
+            assert runner.model_config.get("reasoning_effort") == "low"
+
+    async def test_send_agent_message_switching_agent_updates_model_and_effort(
+        self,
+        client: AsyncClient,
+        isolated_prompts_dir: Path,
+    ) -> None:
+        target = await _seed_agent_target(client)
+        second_model = await client.post(
+            "/api/v1/models",
+            json={
+                "name": "模型2",
+                "provider_id": target["provider_id"],
+                "model_id": "claude-3-5-sonnet",
+                "temperature": 0.5,
+                "max_tokens": 4000,
+                "context_length": 16000,
+            },
+        )
+        assert second_model.status_code == 201
+        second_model_id = second_model.json()["id"]
+
+        await client.post(
+            "/api/v1/agent-definitions",
+            json={
+                "key": "agent-a",
+                "display_name": "Agent A",
+                "description": "Agent A desc",
+                "kind": "primary",
+                "prompt_agent_name": "build",
+                "model_id": target["model_id"],
+                "reasoning_effort": "low",
+                "enabled_tool_categories": ["chapter_read"],
+                "enabled_skills": [],
+                "metadata": {},
+            },
+        )
+        await client.post(
+            "/api/v1/agent-definitions",
+            json={
+                "key": "agent-b",
+                "display_name": "Agent B",
+                "description": "Agent B desc",
+                "kind": "primary",
+                "prompt_agent_name": "build",
+                "model_id": second_model_id,
+                "reasoning_effort": "high",
+                "enabled_tool_categories": ["chapter_read"],
+                "enabled_skills": [],
+                "metadata": {},
+            },
+        )
+
+        session_res = await client.post(
+            "/api/v1/agent/sessions",
+            json={
+                "project_id": target["project_id"],
+                "agent_key": "agent-a",
+            },
+        )
+        assert session_res.status_code == status.HTTP_200_OK
+        session_id = session_res.json()["session_id"]
+        runner = _SESSION_RUNNERS[session_id]
+        assert runner.agent_key == "agent-a"
+        assert runner.model_config.get("model_id") == "gpt-3.5-turbo"
+        assert runner.model_config.get("reasoning_effort") == "low"
+
+        with patch("app.agent_runtime.runner.session_runner.SessionRunner.run", AsyncMock()):
+            send_res = await client.post(
+                f"/api/v1/agent/sessions/{session_id}/message",
+                json={
+                    "message": "switch agent",
+                    "agent_key": "agent-b",
+                },
+            )
+            assert send_res.status_code == status.HTTP_200_OK
+            assert send_res.json()["model_updated"] is True
+            assert runner.agent_key == "agent-b"
+            assert runner.model_config.get("model_id") == "claude-3-5-sonnet"
+            assert runner.model_config.get("reasoning_effort") == "high"
+

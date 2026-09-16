@@ -298,7 +298,7 @@ export interface AgentSession {
 
 export interface AgentSessionCreateRequest {
   project_id: string;
-  model_id: string;
+  model_id?: string;
   max_iterations?: number;
   agent_key?: string;
   reasoning_effort?: ReasoningEffort;
@@ -332,9 +332,9 @@ export interface AgentSessionStateResponse {
 export interface AgentSendMessageRequest {
   message: string;
   attachments?: string[];
-  model_id?: string;
+  model_id?: string | null;
   agent_key?: string;
-  reasoning_effort?: ReasoningEffort;
+  reasoning_effort?: ReasoningEffort | null;
 }
 
 export interface AgentImageAttachment {
