@@ -454,6 +454,12 @@ class SubagentRunner:
         finally:
             await _close_session(session)
         runtime_state["model_config"] = model_config
+        logger.info(
+            f"Subagent {row.agent_key} resolved model config: "
+            f"provider={model_config.get('provider_type')} "
+            f"model={model_config.get('model_id')} "
+            f"reasoning_effort={model_config.get('reasoning_effort') or 'disabled'}"
+        )
         model = create_chat_model(ModelConfig(**to_client_model_config(model_config)))
         graph = create_react_agent(
             agent_config,
