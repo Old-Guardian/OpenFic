@@ -50,6 +50,31 @@
 - ⚖️**成本优先**：多层上下文管理，智能压缩、动态截断、稳定缓存，尽可能降低使用成本
 
 
+## 本 Fork 新增功能
+
+> 本仓库基于 [syrizelink/OpenFic](https://github.com/syrizelink/OpenFic) Fork，在完整保留上游功能的基础上，额外新增了以下能力。
+
+### 🔷 原生 Google Vertex AI（Gemini）接入
+
+- **原生 Gemini 调用**：`google-vertex` 提供商可直接调用 Vertex AI 上的 Gemini 对话模型，支持流式输出、工具调用、结构化输出与用量统计，不再走 OpenAI 兼容层
+- **双认证模式**：支持 ADC（应用默认凭据，从后端运行环境解析）与 Service Account JSON 两种方式；凭据加密保存，全程不落明文，也不会写入日志、Agent 检查点或运行记录
+- **连接级项目与区域**：每个连接独立配置 GCP Project ID 与 Location（含 `global`），连接之间互不干扰
+- **保存前实机验证**：可对指定模型发起一次最小调用完成连接验证，失败时返回脱敏的分级错误提示
+- **多端一致**：浏览器、桌面本地模式、桌面远程模式共用同一套 Provider、认证与调用链路
+- **暂不包含**：Vertex Embedding（向量检索）为第二阶段规划，尚未接入；`google-vertex-anthropic` 尚未原生支持
+
+> 配置与部署说明见 [docs/guides/VERTEX_CONFIGURATION_GUIDE.md](./docs/guides/VERTEX_CONFIGURATION_GUIDE.md)。
+
+### 🎚️ 智能体级模型思考强度
+
+- **独立配置**：每个内置或自定义智能体（Build、Plan、Explore、Composer、Auditor、Writer、Reviewer、Actor 及自建智能体）可在模型之外单独设置思考强度
+- **七档策略**：跟随会话 / 父智能体（Inherit）、关闭（Off）、低、中、高、超高、最大
+- **主智能体**：智能体默认配置对新建会话生效，同时保留聊天窗口的会话级临时覆盖；覆盖只影响当前会话，切换主智能体或新建会话自动恢复默认
+- **子智能体**：可继承调度它的主智能体当前实际使用的强度，也可显式关闭或覆盖为固定档位
+- **会话快照**：已打开及历史会话沿用创建时解析出的真实配置，修改智能体默认值不会静默改写正在进行的会话
+- **Provider 自适应**：档位按目标模型能力自动适配（如三档接口会把「超高 / 最大」归一为「高」），无需手动换算
+
+
 ## 快速开始
 
 ### 🐳 Docker（推荐）
@@ -79,7 +104,7 @@ openfic serve
 ```
 
 
-### 🖥桌面应用
+### 🖥桌面应用（源项目）
 
 前往 [Release Page](https://github.com/syrizelink/OpenFic/releases) 下载桌面应用，在你的系统上原生运行，而无需额外步骤。
 

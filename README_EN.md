@@ -45,6 +45,30 @@
 - 🧠 **Semantic retrieval**: Agentic RAG built on vector search, so Agents can retrieve information efficiently even in projects with millions of words
 - ⚖️ **Cost-aware context handling**: layered context management, smart compression, dynamic truncation, and stable caching to reduce usage cost
 
+## Fork Enhancements
+
+> This repository is a fork of [syrizelink/OpenFic](https://github.com/syrizelink/OpenFic). It keeps every upstream feature and adds the capabilities below.
+
+### 🔷 Native Google Vertex AI (Gemini) support
+
+- **Native Gemini calls**: the `google-vertex` provider can call Gemini chat models on Vertex AI directly, with streaming, tool calling, structured output, and usage stats — no OpenAI-compatible layer involved
+- **Two auth modes**: ADC (Application Default Credentials, resolved from the backend environment) or a Service Account JSON. Credentials are stored encrypted and never persisted in plaintext, and never written to logs, agent checkpoints, or run records
+- **Per-connection project and region**: each connection configures its own GCP Project ID and Location (including `global`), fully isolated from other connections
+- **Validate before saving**: run a minimal live call against a chosen model to verify the connection, with redacted, categorized error messages on failure
+- **Consistent across modes**: browser, desktop local mode, and desktop remote mode share the same provider, auth, and call path
+- **Not yet supported**: Vertex Embeddings (vector retrieval) are planned for a second phase; `google-vertex-anthropic` is not natively supported yet
+
+> See [docs/guides/VERTEX_CONFIGURATION_GUIDE.md](./docs/guides/VERTEX_CONFIGURATION_GUIDE.md) for setup and deployment details.
+
+### 🎚️ Agent-level reasoning effort
+
+- **Per-agent configuration**: every built-in or custom agent (Build, Plan, Explore, Composer, Auditor, Writer, Reviewer, Actor, and your own) can set its reasoning effort independently of its model
+- **Seven options**: Inherit (follow the session / parent agent), Off, Low, Medium, High, Extra High, Maximum
+- **Primary agents**: the agent default applies to new sessions, with a temporary per-session override from the chat window; an override affects only the current session and resets when you switch agents or start a new session
+- **Subagents**: inherit the primary agent's actual effort, turn it off explicitly, or override it with a fixed tier
+- **Session snapshots**: open and historical sessions keep the configuration resolved at creation time, so changing agent defaults never silently rewrites an in-progress session
+- **Provider-aware**: tiers adapt to each model's capabilities (e.g. three-tier endpoints fold Extra High / Maximum into High) with no manual conversion
+
 ## Quick Start
 
 ### 🐳 Docker (Recommended)
