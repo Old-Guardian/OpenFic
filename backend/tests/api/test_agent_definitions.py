@@ -281,3 +281,186 @@ async def test_delete_nonexistent_agent_definition(client: AsyncClient):
 async def test_delete_builtin_agent_definition_rejected(client: AsyncClient):
     response = await client.delete("/api/v1/agent-definitions/build")
     assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.asyncio
+async def test_builtin_agent_definitions_inherit_reasoning_effort(client: AsyncClient):
+    list_response = await client.get("/api/v1/agent-definitions")
+    assert list_response.status_code == status.HTTP_200_OK
+    builtin = [
+        definition
+        for definition in list_response.json()["definitions"]
+        if definition["source"] == "builtin"
+    ]
+    assert len(builtin) == 8
+    assert all(definition["reasoning_effort"] == "inherit" for definition in builtin)
+
+    single_response = await client.get("/api/v1/agent-definitions/explore")
+    assert single_response.status_code == status.HTTP_200_OK
+    assert single_response.json()["reasoning_effort"] == "inherit"
+
+
+@pytest.mark.asyncio
+async def test_create_agent_definition_omitting_reasoning_effort_defaults_to_inherit(
+    client: AsyncClient,
+    isolated_prompts_dir: Path,
+):
+    body = {
+        "key": "inherit-bot",
+        "display_name": "Inherit Bot",
+        "kind": "subagent",
+        "prompt_agent_name": "inherit-bot",
+        "enabled_tool_categories": [],
+        "enabled_skills": [],
+    }
+    response = await client.post("/api/v1/agent-definitions", json=body)
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.json()["reasoning_effort"] == "inherit"
+
+    fetched = await client.get("/api/v1/agent-definitions/inherit-bot")
+    assert fetched.json()["reasoning_effort"] == "inherit"
+
+
+@pytest.mark.asyncio
+async def test_create_agent_definition_accepts_explicit_reasoning_effort(
+    client: AsyncClient,
+    isolated_prompts_dir: Path,
+):
+    body = {
+        "key": "explicit-effort-bot",
+        "display_name": "Explicit Effort Bot",
+        "kind": "subagent",
+        "prompt_agent_name": "explicit-effort-bot",
+        "enabled_tool_categories": [],
+        "enabled_skills": [],
+        "reasoning_effort": "xhigh",
+    }
+    response = await client.post("/api/v1/agent-definitions", json=body)
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.json()["reasoning_effort"] == "xhigh"
+
+    fetched = await client.get("/api/v1/agent-definitions/explicit-effort-bot")
+    assert fetched.json()["reasoning_effort"] == "xhigh"
+
+
+@pytest.mark.asyncio
+async def test_create_agent_definition_rejects_unknown_reasoning_effort(
+    client: AsyncClient,
+    isolated_prompts_dir: Path,
+):
+    body = {
+        "key": "invalid-effort-bot",
+        "display_name": "Invalid Effort Bot",
+        "kind": "subagent",
+        "prompt_agent_name": "invalid-effort-bot",
+        "enabled_tool_categories": [],
+        "enabled_skills": [],
+        "reasoning_effort": "extreme",
+    }
+    response = await client.post("/api/v1/agent-definitions", json=body)
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    listing = await client.get("/api/v1/agent-definitions")
+    keys = {definition["key"] for definition in listing.json()["definitions"]}
+    assert "invalid-effort-bot" not in keys
+
+
+@pytest.mark.asyncio
+async def test_update_agent_definition_sets_and_restores_reasoning_effort(
+    client: AsyncClient,
+    isolated_prompts_dir: Path,
+):
+    create_body = {
+        "key": "effort-bot",
+        "display_name": "Effort Bot",
+        "kind": "subagent",
+        "prompt_agent_name": "effort-bot",
+        "enabled_tool_categories": [],
+        "enabled_skills": [],
+        "reasoning_effort": "high",
+    }
+    await client.post("/api/v1/agent-definitions", json=create_body)
+
+    keep_response = await client.put(
+        "/api/v1/agent-definitions/effort-bot",
+        json={"display_name": "Kept Effort"},
+    )
+    assert keep_response.status_code == status.HTTP_200_OK
+    assert keep_response.json()["reasoning_effort"] == "high"
+
+    restore_response = await client.put(
+        "/api/v1/agent-definitions/effort-bot",
+        json={"reasoning_effort": "inherit"},
+    )
+    assert restore_response.status_code == status.HTTP_200_OK
+    assert restore_response.json()["reasoning_effort"] == "inherit"
+
+    fetched = await client.get("/api/v1/agent-definitions/effort-bot")
+    assert fetched.json()["reasoning_effort"] == "inherit"
+
+
+@pytest.mark.asyncio
+async def test_update_agent_definition_explicit_null_keeps_reasoning_effort(
+    client: AsyncClient,
+    isolated_prompts_dir: Path,
+):
+    create_body = {
+        "key": "null-effort-bot",
+        "display_name": "Null Effort Bot",
+        "kind": "subagent",
+        "prompt_agent_name": "null-effort-bot",
+        "enabled_tool_categories": [],
+        "enabled_skills": [],
+        "reasoning_effort": "high",
+    }
+    await client.post("/api/v1/agent-definitions", json=create_body)
+
+    response = await client.put(
+        "/api/v1/agent-definitions/null-effort-bot",
+        json={"reasoning_effort": None},
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["reasoning_effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_update_agent_definition_rejects_unknown_reasoning_effort(
+    client: AsyncClient,
+    isolated_prompts_dir: Path,
+):
+    create_body = {
+        "key": "rejected-effort-bot",
+        "display_name": "Rejected Effort Bot",
+        "kind": "subagent",
+        "prompt_agent_name": "rejected-effort-bot",
+        "enabled_tool_categories": [],
+        "enabled_skills": [],
+        "reasoning_effort": "medium",
+    }
+    await client.post("/api/v1/agent-definitions", json=create_body)
+
+    response = await client.put(
+        "/api/v1/agent-definitions/rejected-effort-bot",
+        json={"reasoning_effort": "extreme"},
+    )
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    fetched = await client.get("/api/v1/agent-definitions/rejected-effort-bot")
+    assert fetched.json()["reasoning_effort"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_reset_builtin_agent_definition_restores_inherit(client: AsyncClient):
+    update_response = await client.put(
+        "/api/v1/agent-definitions/reviewer",
+        json={"reasoning_effort": "max"},
+    )
+    assert update_response.status_code == status.HTTP_200_OK
+    assert update_response.json()["reasoning_effort"] == "max"
+
+    reset_response = await client.post("/api/v1/agent-definitions/reviewer/reset")
+    assert reset_response.status_code == status.HTTP_200_OK
+    assert reset_response.json()["reasoning_effort"] == "inherit"
+
+    fetched = await client.get("/api/v1/agent-definitions/reviewer")
+    assert fetched.json()["reasoning_effort"] == "inherit"

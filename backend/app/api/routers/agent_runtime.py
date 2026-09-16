@@ -17,6 +17,11 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent_runtime.agents.definitions import load_agent_definition
+from app.agent_runtime.agents.model_policy import (
+    AGENT_REASONING_EFFORT_TIERS,
+    SYSTEM_DEFAULT_MODEL_REFERENCE,
+    SYSTEM_LIGHT_MODEL_REFERENCE,
+)
 from app.agent_runtime.attachments import (
     get_agent_attachment_url,
     load_session_attachments,
@@ -91,7 +96,7 @@ from app.socket import emit
 from app.socket.handlers import agent_session_room, background_project_room
 from app.storage.database import get_session
 from app.storage.models.chapter import Chapter
-from app.storage.repos import revision_repo
+from app.storage.repos import revision_repo, setting_repo
 from app.storage.services import task_service
 
 router = APIRouter(tags=["Agent"])
@@ -519,6 +524,28 @@ async def _validate_primary_agent(session: AsyncSession, agent_key: str) -> None
         )
 
 
+async def _resolve_agent_model_record_id(
+    session: AsyncSession,
+    configured_model_id: str | None,
+    fallback_model_id: str | None = None,
+) -> str | None:
+    """Resolve configured model reference or record ID for an agent."""
+    if configured_model_id == SYSTEM_LIGHT_MODEL_REFERENCE:
+        setting = await setting_repo.get_by_key(session, "light_model")
+        val = setting.value.strip() if setting and setting.value else None
+        if not val:
+            setting = await setting_repo.get_by_key(session, "default_model")
+            val = setting.value.strip() if setting and setting.value else None
+        return val or fallback_model_id
+
+    if configured_model_id in (None, "", SYSTEM_DEFAULT_MODEL_REFERENCE):
+        setting = await setting_repo.get_by_key(session, "default_model")
+        val = setting.value.strip() if setting and setting.value else None
+        return val or fallback_model_id
+
+    return configured_model_id
+
+
 async def _resolve_model_config(
     session: AsyncSession, model_id: str, reasoning_effort: str | None = None
 ) -> dict:
@@ -854,8 +881,20 @@ async def create_agent_session(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"智能体 '{request.agent_key}' 不是主智能体 (kind != primary)",
             )
+        configured_model_id = request.model_id or definition.model_id
+        resolved_model_id = await _resolve_agent_model_record_id(session, configured_model_id)
+        if not resolved_model_id:
+            raise NotFoundError(f"智能体 '{request.agent_key}' 的模型未配置或无法解析")
+
+        if request.reasoning_effort is not None:
+            effective_effort = None if request.reasoning_effort == "off" else request.reasoning_effort
+        elif definition.reasoning_effort in AGENT_REASONING_EFFORT_TIERS:
+            effective_effort = definition.reasoning_effort
+        else:
+            effective_effort = None
+
         model_config = await _resolve_model_config(
-            session, request.model_id, request.reasoning_effort
+            session, resolved_model_id, effective_effort
         )
         session_id = f"agent_{generate_id()}"
         task = await task_service.create_task(
@@ -951,12 +990,17 @@ async def send_agent_message(
 ) -> AgentSendMessageResponse:
     if not body.message.strip() and not body.attachments:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="消息或图片不能为空")
+    if body.agent_key is not None:
+        await _validate_primary_agent(session, body.agent_key)
+
     requested_model_config: dict | None = None
     if body.model_id and session_id not in _SESSION_RUNNERS:
         try:
-            requested_model_config = await _resolve_model_config(
-                session, body.model_id, body.reasoning_effort
-            )
+            requested_model_id = await _resolve_agent_model_record_id(session, body.model_id)
+            if requested_model_id:
+                requested_model_config = await _resolve_model_config(
+                    session, requested_model_id, body.reasoning_effort
+                )
         except NotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         except ValueError as exc:
@@ -993,16 +1037,66 @@ async def send_agent_message(
                 model_updated=False,
                 pending_message=AgentPendingMessageResponse(**pending_message),
             )
-    model_updated = False
-    if body.model_id:
-        try:
-            if requested_model_config is None:
-                requested_model_config = await _resolve_model_config(
-                    session, body.model_id, body.reasoning_effort
-                )
-            runner.update_model_config(
-                requested_model_config
+
+    runner_agent_key = getattr(runner, "agent_key", None)
+    agent_key_changed = body.agent_key is not None and body.agent_key != runner_agent_key
+    if body.agent_key is not None:
+        runner.agent_key = body.agent_key
+
+    current_def = await load_agent_definition(session, getattr(runner, "agent_key", "build") or "build")
+    model_fields = body.model_fields_set
+    model_id_specified = "model_id" in model_fields
+    reasoning_effort_specified = "reasoning_effort" in model_fields
+
+    runner_model_config = getattr(runner, "model_config", None) or {}
+
+    # Determine target model
+    if model_id_specified:
+        if body.model_id:
+            resolved_model_id = await _resolve_agent_model_record_id(session, body.model_id)
+        else:
+            resolved_model_id = await _resolve_agent_model_record_id(session, current_def.model_id)
+        if not resolved_model_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"智能体 '{current_def.key}' 的模型未配置或无法解析",
             )
+    elif agent_key_changed:
+        resolved_model_id = await _resolve_agent_model_record_id(
+            session,
+            current_def.model_id,
+            fallback_model_id=runner_model_config.get("model_record_id"),
+        )
+    else:
+        resolved_model_id = runner_model_config.get("model_record_id")
+
+    # Determine target reasoning effort
+    if reasoning_effort_specified:
+        if body.reasoning_effort is not None:
+            effective_effort = None if body.reasoning_effort == "off" else body.reasoning_effort
+        else:
+            if current_def.reasoning_effort in AGENT_REASONING_EFFORT_TIERS:
+                effective_effort = current_def.reasoning_effort
+            else:
+                effective_effort = None
+    elif agent_key_changed or model_id_specified:
+        if current_def.reasoning_effort in AGENT_REASONING_EFFORT_TIERS:
+            effective_effort = current_def.reasoning_effort
+        else:
+            effective_effort = None
+    else:
+        effective_effort = runner_model_config.get("reasoning_effort")
+        if effective_effort == "off":
+            effective_effort = None
+
+    model_updated = False
+    if (model_id_specified or reasoning_effort_specified or agent_key_changed) and resolved_model_id:
+        try:
+            new_model_config = await _resolve_model_config(
+                session, resolved_model_id, effective_effort
+            )
+            if hasattr(runner, "update_model_config"):
+                runner.update_model_config(new_model_config)
             model_updated = True
         except NotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -1011,17 +1105,6 @@ async def send_agent_message(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(exc),
             ) from exc
-    elif body.reasoning_effort is not None:
-        model_record_id = runner.model_config.get("model_record_id")
-        if isinstance(model_record_id, str) and model_record_id:
-            runner.update_model_config(
-                await _resolve_model_config(
-                    session, model_record_id, body.reasoning_effort
-                )
-            )
-    if body.agent_key:
-        await _validate_primary_agent(session, body.agent_key)
-        runner.agent_key = body.agent_key
     run_kwargs = {"attachments": attachment_metadata} if attachment_metadata else {}
     coro = runner.run(user_request=body.message, **run_kwargs)
     await _launch_task(

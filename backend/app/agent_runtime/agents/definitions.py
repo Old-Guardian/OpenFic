@@ -9,6 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
+from app.agent_runtime.agents.model_policy import (
+    DEFAULT_AGENT_REASONING_EFFORT,
+    AgentReasoningEffort,
+)
 from app.agent_runtime.persistence.model import AgentDefinitionRecord
 
 
@@ -25,6 +29,7 @@ class AgentDefinition:
     metadata: Mapping[str, Any]
     enabled: bool = True
     source: Literal["builtin", "custom"] = "builtin"
+    reasoning_effort: AgentReasoningEffort = DEFAULT_AGENT_REASONING_EFFORT
     color: str | None = None
     icon: str | None = None
     delegatable_agents: tuple[str, ...] = ()
@@ -249,6 +254,7 @@ def agent_definition_from_record(record: AgentDefinitionRecord) -> AgentDefiniti
         metadata=MappingProxyType(dict(record.metadata_json or {})),
         enabled=record.enabled,
         source=cast(Literal["builtin", "custom"], record.source),
+        reasoning_effort=cast(AgentReasoningEffort, record.reasoning_effort),
         color=record.color,
         icon=record.icon,
         delegatable_agents=tuple(record.delegatable_agents or ()),

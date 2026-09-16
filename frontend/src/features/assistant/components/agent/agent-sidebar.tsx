@@ -23,6 +23,8 @@ interface AgentSidebarProps {
   scrollToBottomKey?: string | null;
   modelId: string;
   reasoningEffort?: ReasoningEffort;
+  modelOverride?: string | null;
+  reasoningEffortOverride?: ReasoningEffort | null;
   agentKey?: string;
   inputValue: string;
   attachments: PendingAgentImageAttachment[];
@@ -62,6 +64,8 @@ export function useAgentSidebar({
   scrollToBottomKey,
   modelId,
   reasoningEffort,
+  modelOverride,
+  reasoningEffortOverride,
   agentKey,
   inputValue,
   attachments,
@@ -110,6 +114,8 @@ export function useAgentSidebar({
     projectId,
     modelId,
     reasoningEffort,
+    modelOverride,
+    reasoningEffortOverride,
     agentKey,
     maxIterations: 5,
     onTokenUsage,

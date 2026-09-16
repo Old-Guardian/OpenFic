@@ -29,6 +29,10 @@ import { AgentBrandIcon } from "@/components/agent-brand-icon";
 import { useAppShell } from "@/features/app-shell";
 import { appendMentionMarkup } from "@/features/assistant/lib/mention-text";
 import { fetchAgentDefinitions } from "@/features/settings/lib/agent-definitions-api";
+import {
+  SYSTEM_DEFAULT_MODEL_REFERENCE,
+  SYSTEM_LIGHT_MODEL_REFERENCE,
+} from "@/features/settings/lib/agent-definitions.types";
 import { fetchSettings, updateSettings } from "@/features/settings/lib/settings-api";
 import { useSummaryPanel } from "@/features/writing/hooks/use-summaries";
 import { useVolumeTree } from "@/features/writing/hooks/use-volumes";
@@ -320,6 +324,9 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
       if (typeof window === "undefined") return "";
       return window.localStorage.getItem(ASSISTANT_AGENT_STORAGE_KEY) ?? "";
     });
+    const [sessionModelOverride, setSessionModelOverride] = useState<string | null>(null);
+    const [sessionReasoningEffortOverride, setSessionReasoningEffortOverride] =
+      useState<ReasoningEffort | null>(null);
     const [conversationState, setConversationState] = useState<AssistantConversationStackState>(
       () => createConversationStackState(""),
     );
@@ -401,13 +408,31 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
         },
       });
 
-    const effectiveModelId = useMemo(() => {
-      if (
-        selectedModelId &&
-        llmModelOptions.some((model) => getModelValue(model) === selectedModelId)
-      ) {
-        return selectedModelId;
+    const currentPrimaryAgent = useMemo(
+      () => primaryAgents.find((d) => d.key === effectiveAgentKey),
+      [primaryAgents, effectiveAgentKey],
+    );
+
+    const agentDefaultModelId = useMemo(() => {
+      if (!currentPrimaryAgent) return "";
+      const rawModel = currentPrimaryAgent.model_id;
+      if (!rawModel || rawModel === SYSTEM_DEFAULT_MODEL_REFERENCE) {
+        return settings?.defaultModel ?? "";
       }
+      if (rawModel === SYSTEM_LIGHT_MODEL_REFERENCE) {
+        return settings?.lightModel || settings?.defaultModel || "";
+      }
+      return rawModel;
+    }, [currentPrimaryAgent, settings?.defaultModel, settings?.lightModel]);
+
+    const agentDefaultReasoningEffort = useMemo<ReasoningEffort | null>(() => {
+      if (!currentPrimaryAgent) return null;
+      const effort = currentPrimaryAgent.reasoning_effort;
+      if (!effort || effort === "inherit") return null;
+      return effort as ReasoningEffort;
+    }, [currentPrimaryAgent]);
+
+    const fallbackModelId = useMemo(() => {
       const defaultModelId = settings?.defaultModel;
       if (
         defaultModelId &&
@@ -417,15 +442,50 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
       }
       if (llmModelOptions.length > 0) return getModelValue(llmModelOptions[0]);
       return "";
-    }, [selectedModelId, llmModelOptions, settings?.defaultModel]);
+    }, [settings?.defaultModel, llmModelOptions]);
+
+    const effectiveModelId = useMemo(() => {
+      if (
+        sessionModelOverride &&
+        llmModelOptions.some((model) => getModelValue(model) === sessionModelOverride)
+      ) {
+        return sessionModelOverride;
+      }
+      if (
+        agentDefaultModelId &&
+        llmModelOptions.some((model) => getModelValue(model) === agentDefaultModelId)
+      ) {
+        return agentDefaultModelId;
+      }
+      if (
+        selectedModelId &&
+        llmModelOptions.some((model) => getModelValue(model) === selectedModelId)
+      ) {
+        return selectedModelId;
+      }
+      return fallbackModelId;
+    }, [
+      sessionModelOverride,
+      agentDefaultModelId,
+      selectedModelId,
+      fallbackModelId,
+      llmModelOptions,
+    ]);
 
     const currentModel = useMemo(
       () => llmModelOptions.find((model) => getModelValue(model) === effectiveModelId),
       [effectiveModelId, llmModelOptions],
     );
-    const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(() =>
-      getStoredReasoningEffort(effectiveModelId),
-    );
+
+    const effectiveReasoningEffort = useMemo<ReasoningEffort>(() => {
+      if (sessionReasoningEffortOverride) {
+        return sessionReasoningEffortOverride;
+      }
+      if (agentDefaultReasoningEffort) {
+        return agentDefaultReasoningEffort;
+      }
+      return getStoredReasoningEffort(effectiveModelId);
+    }, [sessionReasoningEffortOverride, agentDefaultReasoningEffort, effectiveModelId]);
     const isToolApprovalBypassEnabled = settings?.agentBypassToolApproval ?? false;
     const agentSidebarRef = useRef<ReturnType<typeof useAgentSidebar> | null>(null);
 
@@ -452,10 +512,6 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
         window.localStorage.setItem(ASSISTANT_AGENT_STORAGE_KEY, selectedAgentKey);
       }
     }, [selectedAgentKey]);
-
-    useEffect(() => {
-      setReasoningEffort(getStoredReasoningEffort(effectiveModelId));
-    }, [effectiveModelId]);
 
     const handleAgentTaskTitleUpdated = useCallback(
       (taskId: string, title: string, updatedAt?: string) => {
@@ -649,7 +705,9 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
       projectId,
       scrollToBottomKey: currentTaskId,
       modelId: effectiveModelId,
-      reasoningEffort,
+      reasoningEffort: effectiveReasoningEffort,
+      modelOverride: sessionModelOverride,
+      reasoningEffortOverride: sessionReasoningEffortOverride,
       agentKey: effectiveAgentKey,
       inputValue,
       attachments: pendingAttachments,
@@ -1004,6 +1062,11 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
                 : undefined,
             initialChanges: bundle.sessionChanges,
           });
+          setSessionModelOverride(null);
+          setSessionReasoningEffortOverride(null);
+          if (typeof bundle.sessionState?.state.agent_key === "string") {
+            setSelectedAgentKey(bundle.sessionState.state.agent_key);
+          }
           setActiveSubagents(bundle.activeSubagentRows);
           setCurrentTaskId(fullTask.id);
           setCurrentTaskTitle(fullTask.title);
@@ -1084,6 +1147,8 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
     const backToTaskList = useCallback(() => {
       setSessionTotalUsage(createSessionTotalUsageState());
       setConversationUsageBySession({});
+      setSessionModelOverride(null);
+      setSessionReasoningEffortOverride(null);
 
       agentSidebar.resetSession();
 
@@ -1213,15 +1278,29 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
       setIsSessionChangesOpen(true);
     }, [canOpenSessionChanges]);
 
-    const handleModelChange = useCallback((nextModelId: string) => {
-      setSelectedModelId(nextModelId);
-      window.localStorage.setItem(ASSISTANT_MODEL_STORAGE_KEY, nextModelId);
-    }, []);
+    const handleModelChange = useCallback(
+      (nextModelId: string) => {
+        if (nextModelId === agentDefaultModelId) {
+          setSessionModelOverride(null);
+        } else {
+          setSessionModelOverride(nextModelId);
+        }
+        setSelectedModelId(nextModelId);
+        window.localStorage.setItem(ASSISTANT_MODEL_STORAGE_KEY, nextModelId);
+      },
+      [agentDefaultModelId],
+    );
 
     const handleReasoningEffortChange = useCallback(
       (nextReasoningEffort: ReasoningEffort) => {
         if (!effectiveModelId) return;
-        setReasoningEffort(nextReasoningEffort);
+        const defaultEffort =
+          agentDefaultReasoningEffort ?? getStoredReasoningEffort(effectiveModelId);
+        if (nextReasoningEffort === defaultEffort) {
+          setSessionReasoningEffortOverride(null);
+        } else {
+          setSessionReasoningEffortOverride(nextReasoningEffort);
+        }
         const stored = (() => {
           try {
             return JSON.parse(
@@ -1236,11 +1315,13 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
           JSON.stringify({ ...stored, [effectiveModelId]: nextReasoningEffort }),
         );
       },
-      [effectiveModelId],
+      [agentDefaultReasoningEffort, effectiveModelId],
     );
 
     const handleAgentChange = useCallback((nextAgentKey: string) => {
       setSelectedAgentKey(nextAgentKey);
+      setSessionModelOverride(null);
+      setSessionReasoningEffortOverride(null);
       window.localStorage.setItem(ASSISTANT_AGENT_STORAGE_KEY, nextAgentKey);
     }, []);
 
@@ -1735,7 +1816,7 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
               projectId={projectId}
               modelId={effectiveModelId}
               models={llmModelOptions}
-              reasoningEffort={reasoningEffort}
+              reasoningEffort={effectiveReasoningEffort}
               isSending={isSendingMessage}
               disabled={isViewingSubagent || isLoadingTask}
               pendingMessage={isViewingSubagent ? null : agentSidebar.pendingMessage}

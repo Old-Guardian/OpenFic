@@ -14,6 +14,10 @@ from app.agent_runtime.agents.definitions import (
     get_default_agent_definition,
     load_agent_definition,
 )
+from app.agent_runtime.agents.model_policy import (
+    DEFAULT_AGENT_REASONING_EFFORT,
+    AgentReasoningEffort,
+)
 from app.agent_runtime.persistence.model import AgentDefinitionRecord
 from app.core.errors import NotFoundError, ValidationError
 from app.storage.repos import agent_definition_repo
@@ -94,6 +98,7 @@ async def create_definition(
     delegatable_agents: list[str] | None,
     color: str | None = None,
     icon: str | None = None,
+    reasoning_effort: AgentReasoningEffort = DEFAULT_AGENT_REASONING_EFFORT,
 ) -> AgentDefinitionRecord:
     existing = await agent_definition_repo.get_by_key(session, key)
     if existing is not None:
@@ -112,6 +117,7 @@ async def create_definition(
         kind=kind,
         prompt_agent_name=prompt_agent_name,
         model_id=model_id,
+        reasoning_effort=reasoning_effort,
         enabled_tool_categories=normalized_tool_categories,
         enabled_skills=normalized_enabled_skills,
         metadata_json=metadata or {},
@@ -135,6 +141,7 @@ def _build_record(
         kind=default.kind,
         prompt_agent_name=default.prompt_agent_name,
         model_id=default.model_id,
+        reasoning_effort=default.reasoning_effort,
         enabled_tool_categories=list(default.enabled_tool_categories),
         enabled_skills=list(default.enabled_skills),
         metadata_json=dict(default.metadata),
@@ -154,6 +161,7 @@ async def update_definition(
     kind: str | None = None,
     prompt_agent_name: str | None = None,
     model_id: str | None = None,
+    reasoning_effort: AgentReasoningEffort | None = None,
     enabled_tool_categories: list[str] | None = None,
     enabled_skills: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
@@ -185,6 +193,8 @@ async def update_definition(
         record.prompt_agent_name = prompt_agent_name
     if model_id is not None:
         record.model_id = model_id
+    if reasoning_effort is not None:
+        record.reasoning_effort = reasoning_effort
     if enabled_tool_categories is not None:
         record.enabled_tool_categories = _normalize_enabled_tool_categories(
             record.kind,

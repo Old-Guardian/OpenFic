@@ -187,6 +187,37 @@ async def test_agent_settings_lock_allows_unrestricted_settings_update(
 
 
 @pytest.mark.asyncio
+async def test_agent_settings_lock_rejects_reasoning_effort_update(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    task = await _create_agent_task(client, session)
+
+    unlocked_response = await client.put(
+        "/api/v1/agent-definitions/reviewer",
+        json={"reasoning_effort": "high"},
+    )
+    assert unlocked_response.status_code == 200
+
+    task.is_running = True
+    session.add(task)
+    await session.commit()
+
+    locked_response = await client.put(
+        "/api/v1/agent-definitions/reviewer",
+        json={"reasoning_effort": "off"},
+    )
+    assert locked_response.status_code == 409
+    assert locked_response.json()["detail"] == {
+        "code": "agent_settings_locked",
+        "message": "Agent 会话运行中，无法修改相关设置",
+    }
+
+    fetched = await client.get("/api/v1/agent-definitions/reviewer")
+    assert fetched.json()["reasoning_effort"] == "high"
+
+
+@pytest.mark.asyncio
 async def test_cancelling_waiting_agent_session_releases_settings_lock(
     client: AsyncClient,
     session: AsyncSession,
