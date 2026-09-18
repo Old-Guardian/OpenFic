@@ -23,6 +23,7 @@ from app.storage.services import (
     writing_activity_service,
     world_info_entry_service,
     world_info_service,
+    knowledge_search_service,
 )
 
 __all__ = [
@@ -45,4 +46,5 @@ __all__ = [
     "writing_activity_service",
     "world_info_entry_service",
     "world_info_service",
+    "knowledge_search_service",
 ]

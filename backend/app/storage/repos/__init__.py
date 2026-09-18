@@ -27,6 +27,7 @@ from app.storage.repos import (
     task_message_repo,
     writing_activity_repo,
     world_info_entry_alias_repo,
+    knowledge_search_repo,
 )
 
 __all__ = [
@@ -53,4 +54,5 @@ __all__ = [
     "task_repo",
     "writing_activity_repo",
     "world_info_entry_alias_repo",
+    "knowledge_search_repo",
 ]
