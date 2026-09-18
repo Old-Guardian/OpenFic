@@ -1,0 +1,128 @@
+{
+  "search_request": {
+    "query": "燃魂 寿命",
+    "match": "all",
+    "limit": 1,
+    "cursor": null
+  },
+  "search_page_1": {
+    "items": [
+      {
+        "id": "entry-1",
+        "kind": "world_entry",
+        "name": "燃魂术",
+        "aliases": ["焚命术"],
+        "matched_fields": ["name", "content"],
+        "matched_terms": ["燃魂", "寿命"],
+        "excerpts": [
+          {
+            "text": "寿命",
+            "start_offset": 20,
+            "end_offset": 22,
+            "line_start": 3,
+            "line_end": 3
+          }
+        ],
+        "content_version": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "excerpts_truncated": false
+      }
+    ],
+    "returned_count": 1,
+    "total_matches": 2,
+    "has_more": true,
+    "next_cursor": "eyJkYXRhc2V0X2ZpbmdlcnByaW50Ijoic2hhMjU2OjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIiLCJraW5kIjoid29ybGRfZW50cnkiLCJsaW1pdCI6MSwib2Zmc2V0IjoxLCJwcm9qZWN0X2lkIjoicHJvamVjdC0xIiwicXVlcnlfZmluZ2VycHJpbnQiOiJzaGEyNTY6MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMSIsInYiOjF9",
+    "match_scope": "literal_terms",
+    "reason": null
+  },
+  "search_page_2": {
+    "items": [
+      {
+        "id": "entry-2",
+        "kind": "world_entry",
+        "name": "燃魂仪式",
+        "aliases": [],
+        "matched_fields": ["name", "content"],
+        "matched_terms": ["燃魂", "寿命"],
+        "excerpts": [
+          {
+            "text": "寿命",
+            "start_offset": 8,
+            "end_offset": 10,
+            "line_start": 1,
+            "line_end": 1
+          }
+        ],
+        "content_version": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "excerpts_truncated": false
+      }
+    ],
+    "returned_count": 1,
+    "total_matches": 2,
+    "has_more": false,
+    "next_cursor": null,
+    "match_scope": "literal_terms",
+    "reason": null
+  },
+  "read_request": {
+    "items": [
+      {"id": "entry-1"},
+      {
+        "id": "entry-2",
+        "start_offset": 4000,
+        "expected_version": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    ],
+    "max_chars_per_item": 4000
+  },
+  "read_partial_response": {
+    "items": [
+      {
+        "id": "entry-1",
+        "status": "ok",
+        "name": "燃魂术",
+        "content_version": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "total_chars": 3,
+        "start_offset": 0,
+        "end_offset": 3,
+        "start_line": 1,
+        "start_line_offset": 0,
+        "content": "甲😀乙",
+        "truncated": false,
+        "next_start_offset": null
+      },
+      {
+        "id": "entry-2",
+        "status": "version_conflict",
+        "name": null,
+        "content_version": null,
+        "total_chars": null,
+        "start_offset": 4000,
+        "end_offset": null,
+        "start_line": null,
+        "start_line_offset": null,
+        "content": null,
+        "truncated": false,
+        "next_start_offset": null
+      }
+    ],
+    "returned_count": 1,
+    "partial_failure": true,
+    "budget_exhausted": false
+  },
+  "errors": {
+    "invalid_cursor": {
+      "error": {
+        "code": "invalid_cursor",
+        "message": "cursor 与当前查询或工具不匹配",
+        "retryable": false
+      }
+    },
+    "cursor_stale": {
+      "error": {
+        "code": "cursor_stale",
+        "message": "数据已变化，请从第一页重新搜索",
+        "retryable": true
+      }
+    }
+  }
+}
