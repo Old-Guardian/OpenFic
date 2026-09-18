@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from app.core.text_normalization import normalize_literal
+from app.storage.models.world_info_entry import WorldInfoEntry
 from app.storage.models.world_info_entry_alias import WorldInfoEntryAlias
 
 
@@ -85,6 +86,23 @@ async def delete_by_entries(session: AsyncSession, entry_ids: list[str]) -> int:
     """批量删除多条目的别名。"""
     if not entry_ids:
         return 0
+    result = await session.execute(
+        sql_delete(WorldInfoEntryAlias).where(
+            col(WorldInfoEntryAlias.entry_id).in_(entry_ids)
+        )
+    )
+    await session.flush()
+    return cast("CursorResult[Any]", result).rowcount
+
+
+async def delete_by_world_info(session: AsyncSession, world_info_id: str) -> int:
+    """删除某世界书全部条目的别名。
+
+    需在删除条目行之前调用：子查询依赖 ``world_info_entries`` 仍然存在。
+    """
+    entry_ids = select(col(WorldInfoEntry.id)).where(
+        col(WorldInfoEntry.world_info_id) == world_info_id
+    )
     result = await session.execute(
         sql_delete(WorldInfoEntryAlias).where(
             col(WorldInfoEntryAlias.entry_id).in_(entry_ids)

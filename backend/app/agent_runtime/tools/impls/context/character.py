@@ -274,7 +274,7 @@ class CreateCharacterTool(AgentTool):
                     revision_id=revision_id,
                     project_id=self.project_id,
                     before={},
-                    after=character_images_by_id([character]),
+                    after=await character_images_by_id(session, [character]),
                 )
                 await session.commit()
                 character_preview = _preview_from_character(character)
@@ -390,7 +390,7 @@ class EditCharacterTool(AgentTool):
                         new_name,
                         exclude_character_id=character.id,
                     )
-                before_images = character_images_by_id([character])
+                before_images = await character_images_by_id(session, [character])
                 updated = await character_service.update_character(
                     session,
                     character.id,
@@ -402,7 +402,7 @@ class EditCharacterTool(AgentTool):
                     revision_id=revision_id,
                     project_id=self.project_id,
                     before=before_images,
-                    after=character_images_by_id([updated]),
+                    after=await character_images_by_id(session, [updated]),
                 )
                 await session.commit()
                 after = _preview_from_character(updated)
@@ -437,7 +437,7 @@ class DeleteCharacterTool(AgentTool):
         try:
             character = await _resolve_character_by_name(session, self.project_id, name)
             before = _preview_from_character(character)
-            before_images = character_images_by_id([character])
+            before_images = await character_images_by_id(session, [character])
             await character_service.delete_character(session, character.id)
             await record_character_diffs(
                 session,

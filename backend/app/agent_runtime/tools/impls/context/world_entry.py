@@ -301,7 +301,7 @@ class CreateWorldEntryTool(AgentTool):
                     revision_id=revision_id,
                     project_id=self.project_id,
                     before={},
-                    after=world_entry_images_by_id([entry], project_id=self.project_id),
+                    after=await world_entry_images_by_id(session, [entry], project_id=self.project_id),
                 )
                 await session.commit()
                 entry_preview = _preview_from_entry(entry)
@@ -422,7 +422,7 @@ class EditWorldEntryTool(AgentTool):
                     new_title,
                     exclude_entry_id=entry.id,
                 )
-            before_images = world_entry_images_by_id([entry], project_id=self.project_id)
+            before_images = await world_entry_images_by_id(session, [entry], project_id=self.project_id)
             updated = await world_info_entry_service.update_entry(
                 session,
                 entry.id,
@@ -434,7 +434,7 @@ class EditWorldEntryTool(AgentTool):
                 revision_id=revision_id,
                 project_id=self.project_id,
                 before=before_images,
-                after=world_entry_images_by_id([updated], project_id=self.project_id),
+                after=await world_entry_images_by_id(session, [updated], project_id=self.project_id),
             )
             await session.commit()
             after = _preview_from_entry(updated)
@@ -471,7 +471,7 @@ class DeleteWorldEntryTool(AgentTool):
             world_info = await _get_project_world_info(session, self.project_id)
             entry = await _resolve_entry_by_title(session, world_info.id, title)
             before = _preview_from_entry(entry)
-            before_images = world_entry_images_by_id([entry], project_id=self.project_id)
+            before_images = await world_entry_images_by_id(session, [entry], project_id=self.project_id)
             await world_info_entry_service.delete_entry(session, entry.id)
             await record_world_entry_diffs(
                 session,

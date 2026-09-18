@@ -168,3 +168,12 @@ async def delete(session: AsyncSession, character: Character) -> None:
     """删除角色。"""
     await session.delete(character)
     await session.flush()
+
+
+async def delete_by_project(session: AsyncSession, project_id: str) -> int:
+    """删除项目下的所有角色。"""
+    result = await session.execute(
+        sql_delete(Character).where(col(Character.project_id) == project_id)
+    )
+    await session.flush()
+    return cast("CursorResult[Any]", result).rowcount

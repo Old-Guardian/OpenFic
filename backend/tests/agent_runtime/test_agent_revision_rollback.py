@@ -1514,3 +1514,240 @@ async def test_rollback_revision_restores_deleted_characters(revision_db):
     assert character_after is not None
     assert character_after.name == "已有角色"
     assert character_after.description == "原始角色描述"
+
+
+async def _begin_revision(session, content: str):
+    """插入用户消息并开启一个修订。"""
+    from app.agent_runtime.revisions import begin_user_revision
+
+    user = await message_repo.insert_message(
+        session,
+        session_id="sess-1",
+        task_id="task-1",
+        project_id="proj-1",
+        role="user",
+        status="sent",
+        content=content,
+    )
+    revision = await begin_user_revision(
+        session,
+        project_id="proj-1",
+        task_id="task-1",
+        agent_session_id="sess-1",
+        user_message_id=user.id,
+        user_message_seq=user.seq,
+        message=f"用户消息: {content}",
+        pre_run_checkpoint_id="cp-before",
+        graph_thread_id="sess-1",
+    )
+    await session.commit()
+    return revision
+
+
+@pytest.mark.asyncio
+async def test_alias_only_character_change_records_snapshot(revision_db):
+    """别名单独变化也要产生有效修订，并快照变化前的别名。"""
+    from app.agent_runtime.revisions import character_images_by_id, record_character_diffs
+    from app.storage.repos import character_repo, revision_character_snapshot_repo
+    from app.storage.services import knowledge_alias_service
+
+    async with revision_db() as session:
+        await knowledge_alias_service.replace_character_aliases(session, "char-1", ["林师弟"])
+        await session.commit()
+
+    async with revision_db() as session:
+        revision = await _begin_revision(session, "只改别名")
+        character = await character_repo.get_by_id(session, "char-1")
+        assert character is not None
+        before = await character_images_by_id(session, [character])
+        await knowledge_alias_service.replace_character_aliases(session, "char-1", ["新别名"])
+        after = await character_images_by_id(session, [character])
+        affected = await record_character_diffs(
+            session,
+            revision_id=revision.id,
+            project_id="proj-1",
+            before=before,
+            after=after,
+        )
+        await session.commit()
+
+    assert affected == ["char-1"]
+
+    async with revision_db() as session:
+        snapshots = await revision_character_snapshot_repo.list_by_revision(
+            session, revision.id
+        )
+    assert len(snapshots) == 1
+    assert snapshots[0].aliases_json == '["林师弟"]'
+
+
+@pytest.mark.asyncio
+async def test_rollback_revision_restores_character_aliases(revision_db):
+    from app.agent_runtime.revisions import (
+        character_images_by_id,
+        record_character_diffs,
+        rollback_revision_for_session,
+    )
+    from app.storage.repos import character_repo
+    from app.storage.services import knowledge_alias_service
+
+    async with revision_db() as session:
+        await knowledge_alias_service.replace_character_aliases(session, "char-1", ["林师弟"])
+        await session.commit()
+
+    async with revision_db() as session:
+        revision = await _begin_revision(session, "改别名")
+        character = await character_repo.get_by_id(session, "char-1")
+        assert character is not None
+        before = await character_images_by_id(session, [character])
+        await knowledge_alias_service.replace_character_aliases(session, "char-1", ["新别名"])
+        after = await character_images_by_id(session, [character])
+        await record_character_diffs(
+            session,
+            revision_id=revision.id,
+            project_id="proj-1",
+            before=before,
+            after=after,
+        )
+        await session.commit()
+
+    async with revision_db() as session:
+        rollback_result = await rollback_revision_for_session(
+            session,
+            agent_session_id="sess-1",
+            revision_id=revision.id,
+        )
+        await session.commit()
+
+    assert set(rollback_result.affected_characters) == {"char-1"}
+
+    async with revision_db() as session:
+        assert await knowledge_alias_service.list_character_aliases(session, "char-1") == [
+            "林师弟"
+        ]
+
+
+@pytest.mark.asyncio
+async def test_rollback_old_snapshot_without_aliases_clears_later_ones(revision_db):
+    """旧快照没有别名列，恢复时按当时的空别名列表处理。"""
+    from app.agent_runtime.revisions import (
+        character_images_by_id,
+        record_character_diffs,
+        rollback_revision_for_session,
+    )
+    from app.storage.repos import character_repo
+    from app.storage.services import knowledge_alias_service
+
+    async with revision_db() as session:
+        revision = await _begin_revision(session, "当时没有别名")
+        character = await character_repo.get_by_id(session, "char-1")
+        assert character is not None
+        before = await character_images_by_id(session, [character])
+        await knowledge_alias_service.replace_character_aliases(session, "char-1", ["后来加的"])
+        after = await character_images_by_id(session, [character])
+        await record_character_diffs(
+            session,
+            revision_id=revision.id,
+            project_id="proj-1",
+            before=before,
+            after=after,
+        )
+        await session.commit()
+
+    async with revision_db() as session:
+        rollback_result = await rollback_revision_for_session(
+            session,
+            agent_session_id="sess-1",
+            revision_id=revision.id,
+        )
+        await session.commit()
+
+    assert set(rollback_result.affected_characters) == {"char-1"}
+
+    async with revision_db() as session:
+        assert await knowledge_alias_service.list_character_aliases(session, "char-1") == []
+
+
+@pytest.mark.asyncio
+async def test_alias_only_world_entry_change_records_snapshot(revision_db):
+    from app.agent_runtime.revisions import (
+        record_world_entry_diffs,
+        world_entry_images_by_id,
+    )
+    from app.storage.repos import revision_world_entry_snapshot_repo, world_info_entry_repo
+    from app.storage.services import knowledge_alias_service
+
+    async with revision_db() as session:
+        await knowledge_alias_service.replace_entry_aliases(session, "entry-1", ["旧别名"])
+        await session.commit()
+
+    async with revision_db() as session:
+        revision = await _begin_revision(session, "只改条目别名")
+        entry = await world_info_entry_repo.get_by_id(session, "entry-1")
+        assert entry is not None
+        before = await world_entry_images_by_id(session, [entry], project_id="proj-1")
+        await knowledge_alias_service.replace_entry_aliases(session, "entry-1", ["新别名"])
+        after = await world_entry_images_by_id(session, [entry], project_id="proj-1")
+        affected = await record_world_entry_diffs(
+            session,
+            revision_id=revision.id,
+            project_id="proj-1",
+            before=before,
+            after=after,
+        )
+        await session.commit()
+
+    assert affected == ["entry-1"]
+
+    async with revision_db() as session:
+        snapshots = await revision_world_entry_snapshot_repo.list_by_revision(
+            session, revision.id
+        )
+    assert len(snapshots) == 1
+    assert snapshots[0].aliases_json == '["旧别名"]'
+
+
+@pytest.mark.asyncio
+async def test_rollback_revision_restores_world_entry_aliases(revision_db):
+    from app.agent_runtime.revisions import (
+        record_world_entry_diffs,
+        rollback_revision_for_session,
+        world_entry_images_by_id,
+    )
+    from app.storage.repos import world_info_entry_repo
+    from app.storage.services import knowledge_alias_service
+
+    async with revision_db() as session:
+        await knowledge_alias_service.replace_entry_aliases(session, "entry-1", ["旧别名"])
+        await session.commit()
+
+    async with revision_db() as session:
+        revision = await _begin_revision(session, "改条目别名")
+        entry = await world_info_entry_repo.get_by_id(session, "entry-1")
+        assert entry is not None
+        before = await world_entry_images_by_id(session, [entry], project_id="proj-1")
+        await knowledge_alias_service.replace_entry_aliases(session, "entry-1", ["新别名"])
+        after = await world_entry_images_by_id(session, [entry], project_id="proj-1")
+        await record_world_entry_diffs(
+            session,
+            revision_id=revision.id,
+            project_id="proj-1",
+            before=before,
+            after=after,
+        )
+        await session.commit()
+
+    async with revision_db() as session:
+        rollback_result = await rollback_revision_for_session(
+            session,
+            agent_session_id="sess-1",
+            revision_id=revision.id,
+        )
+        await session.commit()
+
+    assert set(rollback_result.affected_world_entries) == {"entry-1"}
+
+    async with revision_db() as session:
+        assert await knowledge_alias_service.list_entry_aliases(session, "entry-1") == [
+            "旧别名"
+        ]

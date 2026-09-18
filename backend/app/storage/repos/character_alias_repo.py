@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
 from app.core.text_normalization import normalize_literal
+from app.storage.models.character import Character
 from app.storage.models.character_alias import CharacterAlias
 
 
@@ -92,6 +93,19 @@ async def delete_by_characters(session: AsyncSession, character_ids: list[str]) 
         sql_delete(CharacterAlias).where(
             col(CharacterAlias.character_id).in_(character_ids)
         )
+    )
+    await session.flush()
+    return cast("CursorResult[Any]", result).rowcount
+
+
+async def delete_by_project(session: AsyncSession, project_id: str) -> int:
+    """删除某项目全部角色的别名。
+
+    需在删除角色行之前调用：子查询依赖 ``characters`` 仍然存在。
+    """
+    character_ids = select(col(Character.id)).where(col(Character.project_id) == project_id)
+    result = await session.execute(
+        sql_delete(CharacterAlias).where(col(CharacterAlias.character_id).in_(character_ids))
     )
     await session.flush()
     return cast("CursorResult[Any]", result).rowcount

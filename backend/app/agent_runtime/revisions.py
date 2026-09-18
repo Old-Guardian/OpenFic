@@ -31,6 +31,7 @@ from app.storage.models.revision_world_entry_snapshot import RevisionWorldEntryS
 from app.storage.models.world_info_entry import WorldInfoEntry
 from app.storage.repos import (
     chapter_repo,
+    character_alias_repo,
     character_repo,
     commit_repo,
     note_category_repo,
@@ -44,6 +45,7 @@ from app.storage.repos import (
     revision_world_entry_snapshot_repo,
     task_repo,
     volume_repo,
+    world_info_entry_alias_repo,
     world_info_entry_repo,
 )
 from app.storage.services import writing_activity_service
@@ -92,6 +94,7 @@ class WorldEntryImage:
     content: str
     token_count: int
     is_enabled: bool
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -101,6 +104,7 @@ class CharacterImage:
     name: str
     description: str
     is_favorited: bool
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -548,7 +552,30 @@ async def record_note_category_diffs(
     return affected
 
 
-def _image_from_world_entry(entry: WorldInfoEntry, project_id: str) -> WorldEntryImage:
+def _dump_aliases(aliases: tuple[str, ...]) -> str | None:
+    """别名列表序列化为 JSON 数组；空列表存 NULL，与旧快照缺失字段同义。"""
+    return json.dumps(list(aliases), ensure_ascii=False) if aliases else None
+
+
+def _load_aliases(raw: str | None) -> tuple[str, ...]:
+    """解析快照里的别名；NULL 或无法解析的值按当时的空别名列表解释。"""
+    if not raw:
+        return ()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    return tuple(value for value in parsed if isinstance(value, str))
+
+
+def _image_from_world_entry(
+    entry: WorldInfoEntry,
+    project_id: str,
+    *,
+    aliases: tuple[str, ...] = (),
+) -> WorldEntryImage:
     return WorldEntryImage(
         id=entry.id,
         project_id=project_id,
@@ -559,6 +586,7 @@ def _image_from_world_entry(entry: WorldInfoEntry, project_id: str) -> WorldEntr
         content=entry.content,
         token_count=entry.token_count,
         is_enabled=entry.is_enabled,
+        aliases=aliases,
     )
 
 
@@ -577,6 +605,7 @@ def _image_from_world_entry_snapshot(
         content=snapshot.content or "",
         token_count=snapshot.token_count or 0,
         is_enabled=snapshot.is_enabled if snapshot.is_enabled is not None else True,
+        aliases=_load_aliases(snapshot.aliases_json),
     )
 
 
@@ -608,6 +637,7 @@ async def _snapshot_from_world_entry_image(
         content_blob_id=content_blob_id,
         token_count=image.token_count,
         is_enabled=image.is_enabled,
+        aliases_json=_dump_aliases(image.aliases),
     )
 def _world_entry_has_changed(
     before: WorldEntryImage | None,
@@ -623,15 +653,27 @@ def _world_entry_has_changed(
         or before.content != after.content
         or before.token_count != after.token_count
         or before.is_enabled != after.is_enabled
+        or before.aliases != after.aliases
     )
 
 
-def world_entry_images_by_id(
+async def world_entry_images_by_id(
+    session: AsyncSession,
     entries: list[WorldInfoEntry],
     *,
     project_id: str,
 ) -> dict[str, WorldEntryImage]:
-    return {entry.id: _image_from_world_entry(entry, project_id) for entry in entries}
+    aliases_by_id: dict[str, list[str]] = {entry.id: [] for entry in entries}
+    for row in await world_info_entry_alias_repo.list_by_entries(
+        session, [entry.id for entry in entries]
+    ):
+        aliases_by_id.setdefault(row.entry_id, []).append(row.alias)
+    return {
+        entry.id: _image_from_world_entry(
+            entry, project_id, aliases=tuple(aliases_by_id.get(entry.id, []))
+        )
+        for entry in entries
+    }
 
 
 async def record_world_entry_diffs(
@@ -662,13 +704,18 @@ async def record_world_entry_diffs(
     return affected
 
 
-def _image_from_character(character: Character) -> CharacterImage:
+def _image_from_character(
+    character: Character,
+    *,
+    aliases: tuple[str, ...] = (),
+) -> CharacterImage:
     return CharacterImage(
         id=character.id,
         project_id=character.project_id,
         name=character.name,
         description=character.description,
         is_favorited=character.is_favorited,
+        aliases=aliases,
     )
 
 
@@ -683,6 +730,7 @@ def _image_from_character_snapshot(
         name=snapshot.name or "",
         description=snapshot.description or "",
         is_favorited=snapshot.is_favorited if snapshot.is_favorited is not None else False,
+        aliases=_load_aliases(snapshot.aliases_json),
     )
 
 
@@ -710,6 +758,7 @@ async def _snapshot_from_character_image(
         description=description,
         description_blob_id=description_blob_id,
         is_favorited=image.is_favorited,
+        aliases_json=_dump_aliases(image.aliases),
     )
 def _character_has_changed(
     before: CharacterImage | None,
@@ -721,11 +770,25 @@ def _character_has_changed(
         before.name != after.name
         or before.description != after.description
         or before.is_favorited != after.is_favorited
+        or before.aliases != after.aliases
     )
 
 
-def character_images_by_id(characters: list[Character]) -> dict[str, CharacterImage]:
-    return {character.id: _image_from_character(character) for character in characters}
+async def character_images_by_id(
+    session: AsyncSession,
+    characters: list[Character],
+) -> dict[str, CharacterImage]:
+    aliases_by_id: dict[str, list[str]] = {character.id: [] for character in characters}
+    for row in await character_alias_repo.list_by_characters(
+        session, [character.id for character in characters]
+    ):
+        aliases_by_id.setdefault(row.character_id, []).append(row.alias)
+    return {
+        character.id: _image_from_character(
+            character, aliases=tuple(aliases_by_id.get(character.id, []))
+        )
+        for character in characters
+    }
 
 
 async def record_character_diffs(
@@ -1097,6 +1160,9 @@ async def rollback_revision_for_session(
         after_entry_image = _image_from_world_entry_snapshot(entry_snapshot)
         if after_entry_image is None:
             if current_entry is not None:
+                await world_info_entry_alias_repo.delete_by_entry(
+                    session, entry_snapshot.entry_id
+                )
                 await world_info_entry_repo.delete(session, current_entry)
         elif current_entry is None:
             await world_info_entry_repo.create(
@@ -1112,6 +1178,9 @@ async def rollback_revision_for_session(
                     is_enabled=after_entry_image.is_enabled,
                 ),
             )
+            await world_info_entry_alias_repo.replace_for_entry(
+                session, after_entry_image.id, list(after_entry_image.aliases)
+            )
         else:
             current_entry.world_info_id = after_entry_image.world_info_id
             current_entry.uid = after_entry_image.uid
@@ -1122,6 +1191,9 @@ async def rollback_revision_for_session(
             current_entry.is_enabled = after_entry_image.is_enabled
             current_entry.updated_at = datetime.now(UTC)
             await world_info_entry_repo.update_entry(session, current_entry)
+            await world_info_entry_alias_repo.replace_for_entry(
+                session, after_entry_image.id, list(after_entry_image.aliases)
+            )
 
     affected_characters: list[str] = []
     character_deletes = [item for item in restore_by_character.values() if not item.exists]
@@ -1134,6 +1206,9 @@ async def rollback_revision_for_session(
         after_character_image = _image_from_character_snapshot(character_snapshot)
         if after_character_image is None:
             if current_character is not None:
+                await character_alias_repo.delete_by_character(
+                    session, character_snapshot.character_id
+                )
                 await character_repo.delete(session, current_character)
         elif current_character is None:
             await character_repo.create(
@@ -1146,12 +1221,18 @@ async def rollback_revision_for_session(
                     is_favorited=after_character_image.is_favorited,
                 ),
             )
+            await character_alias_repo.replace_for_character(
+                session, after_character_image.id, list(after_character_image.aliases)
+            )
         else:
             current_character.name = after_character_image.name
             current_character.description = after_character_image.description
             current_character.is_favorited = after_character_image.is_favorited
             current_character.updated_at = datetime.now(UTC)
             await character_repo.update(session, current_character)
+            await character_alias_repo.replace_for_character(
+                session, after_character_image.id, list(after_character_image.aliases)
+            )
 
     await refresh_project_stats(session, target.project_id)
     await compaction_repo.delete_intersecting_or_after(

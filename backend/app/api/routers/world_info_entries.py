@@ -37,12 +37,13 @@ router = APIRouter(tags=["world-info"])
 MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024
 
 
-def _entry_to_response(entry) -> WorldInfoEntryResponse:
+def _entry_to_response(entry, aliases: list[str]) -> WorldInfoEntryResponse:
     """
     将 WorldInfoEntry 模型转换为响应模型。
 
     Args:
         entry: WorldInfoEntry 模型实例。
+        aliases: 条目的别名列表。
 
     Returns:
         WorldInfoEntryResponse。
@@ -56,6 +57,7 @@ def _entry_to_response(entry) -> WorldInfoEntryResponse:
         content=entry.content,
         token_count=entry.token_count,
         is_enabled=entry.is_enabled,
+        aliases=aliases,
         created_at=entry.created_at,
         updated_at=entry.updated_at,
     )
@@ -73,7 +75,7 @@ def _preview_entry_to_response(
     )
 
 
-def _entry_to_brief_response(entry) -> WorldInfoEntryBriefResponse:
+def _entry_to_brief_response(entry, aliases: list[str]) -> WorldInfoEntryBriefResponse:
     """将 WorldInfoEntry 模型转换为轻量响应模型（不含 content）。"""
     return WorldInfoEntryBriefResponse(
         id=entry.id,
@@ -83,12 +85,23 @@ def _entry_to_brief_response(entry) -> WorldInfoEntryBriefResponse:
         order=entry.order,
         token_count=entry.token_count,
         is_enabled=entry.is_enabled,
+        aliases=aliases,
         created_at=entry.created_at,
         updated_at=entry.updated_at,
     )
 
 
 # ============== 世界书条目端点 ==============
+
+
+async def _entry_with_aliases(
+    session: AsyncSession, entry
+) -> WorldInfoEntryResponse:
+    """读取条目别名并生成详情响应。"""
+    aliases_by_id = await world_info_entry_service.list_aliases_by_ids(
+        session, [entry.id]
+    )
+    return _entry_to_response(entry, aliases_by_id.get(entry.id, []))
 
 
 @router.post(
@@ -236,8 +249,9 @@ async def create_entry(
             content=data.content,
             token_count=data.token_count,
             is_enabled=data.is_enabled,
+            aliases=data.aliases,
         )
-        return _entry_to_response(entry)
+        return await _entry_with_aliases(session, entry)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ValueError as e:
@@ -267,8 +281,14 @@ async def list_entries(
     """
     try:
         entries = await world_info_entry_service.list_entries(session, world_info_id)
+        aliases_by_id = await world_info_entry_service.list_aliases_by_ids(
+            session, [entry.id for entry in entries]
+        )
         return WorldInfoEntryBriefListResponse(
-            items=[_entry_to_brief_response(entry) for entry in entries],
+            items=[
+                _entry_to_brief_response(entry, aliases_by_id.get(entry.id, []))
+                for entry in entries
+            ],
             total=len(entries),
         )
     except NotFoundError as e:
@@ -299,7 +319,7 @@ async def get_entry(
     """
     try:
         entry = await world_info_entry_service.get_entry(session, entry_id)
-        return _entry_to_response(entry)
+        return await _entry_with_aliases(session, entry)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
@@ -337,8 +357,9 @@ async def update_entry(
             content=data.content,
             token_count=data.token_count,
             is_enabled=data.is_enabled,
+            aliases=data.aliases,
         )
-        return _entry_to_response(entry)
+        return await _entry_with_aliases(session, entry)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except world_info_entry_service.WorldInfoEntryNameConflictError as e:
@@ -431,7 +452,10 @@ async def move_entry(
         entry = await world_info_entry_service.move_entry(
             session, entry_id, data.new_order
         )
-        return _entry_to_brief_response(entry)
+        aliases_by_id = await world_info_entry_service.list_aliases_by_ids(
+            session, [entry.id]
+        )
+        return _entry_to_brief_response(entry, aliases_by_id.get(entry.id, []))
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ValueError as e:
@@ -463,7 +487,7 @@ async def toggle_entry(
     try:
         logger.info(f"切换条目开关: {entry_id}")
         entry = await world_info_entry_service.toggle_entry(session, entry_id)
-        return _entry_to_response(entry)
+        return await _entry_with_aliases(session, entry)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 

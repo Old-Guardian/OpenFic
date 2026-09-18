@@ -3,6 +3,7 @@
 WorldInfoEntry Repository - 世界书条目数据访问层。
 """
 
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import delete as sql_delete
@@ -85,6 +86,23 @@ async def list_all_by_world_info(
         select(WorldInfoEntry)
         .where(col(WorldInfoEntry.world_info_id) == world_info_id)
         .order_by(col(WorldInfoEntry.order))
+    )
+    return list(result.scalars().all())
+
+
+async def list_ids_by_world_info(
+    session: AsyncSession,
+    world_info_id: str,
+    entry_ids: list[str],
+) -> list[str]:
+    """获取世界书内且属于给定 ID 集合的条目 ID。"""
+    if not entry_ids:
+        return []
+    result = await session.execute(
+        select(col(WorldInfoEntry.id)).where(
+            col(WorldInfoEntry.world_info_id) == world_info_id,
+            col(WorldInfoEntry.id).in_(entry_ids),
+        )
     )
     return list(result.scalars().all())
 
@@ -245,7 +263,7 @@ async def batch_toggle(
             col(WorldInfoEntry.world_info_id) == world_info_id,
             col(WorldInfoEntry.id).in_(entry_ids),
         )
-        .values(is_enabled=is_enabled)
+        .values(is_enabled=is_enabled, updated_at=datetime.now(UTC))
     )
     await session.flush()
     return cast("CursorResult[Any]", result).rowcount
@@ -282,7 +300,7 @@ async def shift_orders(
             col(WorldInfoEntry.order) >= start_order,
             col(WorldInfoEntry.order) <= end_order,
         )
-        .values(order=col(WorldInfoEntry.order) + delta)
+        .values(order=col(WorldInfoEntry.order) + delta, updated_at=datetime.now(UTC))
     )
     await session.flush()
 

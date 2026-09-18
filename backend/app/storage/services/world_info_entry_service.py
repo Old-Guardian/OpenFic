@@ -14,6 +14,7 @@ from app.core.errors import NotFoundError
 from app.core.utils.tiktoken import get_encoding
 from app.storage.models.world_info_entry import WorldInfoEntry
 from app.storage.repos import world_info_entry_repo
+from app.storage.services import knowledge_alias_service
 from app.storage.services.world_info_service import get_world_info
 
 
@@ -127,7 +128,11 @@ async def ensure_entry_name_available(
 
 
 def parse_sillytavern_worldbook(raw_payload: bytes) -> WorldInfoImportPreviewResult:
-    """解析 SillyTavern 世界书 JSON 并归一化为当前项目结构。"""
+    """解析 SillyTavern 世界书 JSON 并归一化为当前项目结构。
+
+    第三方格式没有别名概念，解析结果不包含别名；导入因此无法无损往返
+    别名数据，需要别名的条目应在导入后单独维护。
+    """
     try:
         payload = json.loads(raw_payload.decode("utf-8"))
     except UnicodeDecodeError as exc:
@@ -198,6 +203,9 @@ async def import_entries(
         validate_editor_content(entry.content)
 
     if mode == "overwrite":
+        await knowledge_alias_service.delete_entry_aliases_by_world_info(
+            session, world_info_id
+        )
         await world_info_entry_repo.delete_by_world_info(session, world_info_id)
         existing_entries: list[WorldInfoEntry] = []
     else:
@@ -253,6 +261,7 @@ async def create_entry(
     content: str = "",
     token_count: int = 0,
     is_enabled: bool = True,
+    aliases: list[str] | None = None,
 ) -> WorldInfoEntry:
     """
     创建世界书条目。
@@ -264,6 +273,7 @@ async def create_entry(
         content: 条目内容。
         token_count: Token 数量。
         is_enabled: 开关状态。
+        aliases: 别名列表；缺省表示无别名，与条目在同一事务写入。
 
     Returns:
         创建的条目实例。
@@ -278,6 +288,11 @@ async def create_entry(
 
     existing_names = await _get_existing_entry_names(session, world_info_id)
     unique_name = generate_unique_entry_name(name, existing_names)
+    normalized_aliases = (
+        knowledge_alias_service.normalize_aliases(aliases, entity_name=unique_name)
+        if aliases is not None
+        else []
+    )
 
     # 获取当前最大 UID 和 order
     max_uid = await world_info_entry_repo.get_max_uid(session, world_info_id)
@@ -292,7 +307,12 @@ async def create_entry(
         token_count=token_count,
         is_enabled=is_enabled,
     )
-    return await world_info_entry_repo.create(session, entry)
+    entry = await world_info_entry_repo.create(session, entry)
+    if normalized_aliases:
+        await knowledge_alias_service.replace_entry_aliases(
+            session, entry.id, normalized_aliases
+        )
+    return entry
 
 
 async def get_entry(session: AsyncSession, entry_id: str) -> WorldInfoEntry:
@@ -344,6 +364,7 @@ async def update_entry(
     content: str | None = None,
     token_count: int | None = None,
     is_enabled: bool | None = None,
+    aliases: list[str] | None = None,
 ) -> WorldInfoEntry:
     """
     更新世界书条目。
@@ -355,6 +376,7 @@ async def update_entry(
         content: 新内容。
         token_count: 新 Token 数量。
         is_enabled: 新开关状态。
+        aliases: 新别名列表；``None`` 表示保留既有别名，``[]`` 表示清空。
 
     Returns:
         更新后的条目实例。
@@ -378,14 +400,24 @@ async def update_entry(
         entry.token_count = token_count
     if is_enabled is not None:
         entry.is_enabled = is_enabled
+    normalized_aliases = (
+        knowledge_alias_service.normalize_aliases(aliases, entity_name=entry.name)
+        if aliases is not None
+        else None
+    )
 
     entry.updated_at = datetime.now(UTC)
-    return await world_info_entry_repo.update_entry(session, entry)
+    entry = await world_info_entry_repo.update_entry(session, entry)
+    if normalized_aliases is not None:
+        await knowledge_alias_service.replace_entry_aliases(
+            session, entry.id, normalized_aliases
+        )
+    return entry
 
 
 async def delete_all_entries(session: AsyncSession, world_info_id: str) -> int:
     """
-    删除世界书的所有条目。
+    删除世界书的所有条目及其别名。
 
     Args:
         session: 数据库 session。
@@ -397,13 +429,14 @@ async def delete_all_entries(session: AsyncSession, world_info_id: str) -> int:
     await get_world_info(session, world_info_id)
     entries = await world_info_entry_repo.list_all_by_world_info(session, world_info_id)
     count = len(entries)
+    await knowledge_alias_service.delete_entry_aliases_by_world_info(session, world_info_id)
     await world_info_entry_repo.delete_by_world_info(session, world_info_id)
     return count
 
 
 async def delete_entry(session: AsyncSession, entry_id: str) -> None:
     """
-    删除世界书条目，并调整后续条目的 order。
+    删除世界书条目及其别名，并调整后续条目的 order。
 
     Args:
         session: 数据库 session。
@@ -417,6 +450,7 @@ async def delete_entry(session: AsyncSession, entry_id: str) -> None:
     world_info_id = entry.world_info_id
 
     # 删除条目
+    await knowledge_alias_service.delete_entry_aliases(session, entry_id)
     await world_info_entry_repo.delete(session, entry)
 
     # 将后续条目的 order 减 1
@@ -517,12 +551,33 @@ async def batch_delete_entries(
     world_info_id: str,
     entry_ids: list[str],
 ) -> int:
-    """批量删除条目。"""
+    """批量删除条目及其别名。
+
+    别名只清理确实属于该世界书的条目，避免跨世界书误删。
+    """
     await get_world_info(session, world_info_id)
+    scoped_entry_ids = await world_info_entry_repo.list_ids_by_world_info(
+        session, world_info_id, entry_ids
+    )
+    await knowledge_alias_service.delete_entry_aliases_by_ids(session, scoped_entry_ids)
     deleted = await world_info_entry_repo.batch_delete(
         session, world_info_id, entry_ids
     )
     return deleted
+
+
+async def list_aliases(session: AsyncSession, entry_id: str) -> list[str]:
+    """获取条目别名，按用户输入顺序返回。"""
+    await get_entry(session, entry_id)
+    return await knowledge_alias_service.list_entry_aliases(session, entry_id)
+
+
+async def list_aliases_by_ids(
+    session: AsyncSession,
+    entry_ids: list[str],
+) -> dict[str, list[str]]:
+    """批量获取条目别名，缺失的条目返回空列表。"""
+    return await knowledge_alias_service.list_entry_aliases_by_ids(session, entry_ids)
 
 
 async def search_entries(

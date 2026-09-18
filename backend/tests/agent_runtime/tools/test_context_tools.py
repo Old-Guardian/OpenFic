@@ -251,7 +251,11 @@ async def test_create_character_returns_diff() -> None:
         "app.agent_runtime.tools.impls.context.character.character_service"
     ) as mock_character_service, patch(
         "app.agent_runtime.tools.impls.context.character.record_character_diffs"
-    ) as mock_record_diffs:
+    ) as mock_record_diffs, patch(
+        "app.agent_runtime.tools.impls.context.character.character_images_by_id",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
         mock_character_repo.list_all_by_project = AsyncMock(return_value=[])
@@ -391,7 +395,11 @@ async def test_edit_character_replaces_description_text() -> None:
         "app.agent_runtime.tools.impls.context.character.character_service"
     ) as mock_character_service, patch(
         "app.agent_runtime.tools.impls.context.character.record_character_diffs"
-    ) as mock_record_diffs:
+    ) as mock_record_diffs, patch(
+        "app.agent_runtime.tools.impls.context.character.character_images_by_id",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
         mock_character_repo.list_all_by_project = AsyncMock(return_value=[character])
@@ -483,7 +491,11 @@ async def test_delete_character_removes_name() -> None:
         "app.agent_runtime.tools.impls.context.character.character_service"
     ) as mock_character_service, patch(
         "app.agent_runtime.tools.impls.context.character.record_character_diffs"
-    ) as mock_record_diffs:
+    ) as mock_record_diffs, patch(
+        "app.agent_runtime.tools.impls.context.character.character_images_by_id",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
         mock_character_repo.list_all_by_project = AsyncMock(return_value=[character])
@@ -618,7 +630,11 @@ async def test_create_world_entry_returns_diff() -> None:
         "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_service"
     ) as mock_entry_service, patch(
         "app.agent_runtime.tools.impls.context.world_entry.record_world_entry_diffs"
-    ) as mock_record_diffs:
+    ) as mock_record_diffs, patch(
+        "app.agent_runtime.tools.impls.context.world_entry.world_entry_images_by_id",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
         mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
@@ -807,7 +823,11 @@ async def test_edit_world_entry_returns_diff() -> None:
         "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_service"
     ) as mock_entry_service, patch(
         "app.agent_runtime.tools.impls.context.world_entry.record_world_entry_diffs"
-    ) as mock_record_diffs:
+    ) as mock_record_diffs, patch(
+        "app.agent_runtime.tools.impls.context.world_entry.world_entry_images_by_id",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
         mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
@@ -941,7 +961,11 @@ async def test_delete_world_entry_removes_title() -> None:
         "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_service"
     ) as mock_entry_service, patch(
         "app.agent_runtime.tools.impls.context.world_entry.record_world_entry_diffs"
-    ) as mock_record_diffs:
+    ) as mock_record_diffs, patch(
+        "app.agent_runtime.tools.impls.context.world_entry.world_entry_images_by_id",
+        new_callable=AsyncMock,
+        return_value={},
+    ):
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
         mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))

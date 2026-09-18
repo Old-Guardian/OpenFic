@@ -10,10 +10,17 @@ from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import NotFoundError
-from app.core.storage import delete_cover_file, save_cover_file
+from app.core.storage import delete_character_image, delete_cover_file, save_cover_file
 from app.storage.models.project import Project
-from app.storage.repos import chapter_repo, project_repo, volume_repo
-from app.storage.services import task_service, volume_service
+from app.storage.repos import (
+    chapter_repo,
+    character_repo,
+    project_repo,
+    volume_repo,
+    world_info_entry_repo,
+    world_info_repo,
+)
+from app.storage.services import knowledge_alias_service, task_service, volume_service
 from app.storage.services.revision_service import delete_revision_data_by_project
 
 
@@ -171,6 +178,23 @@ async def delete_project(session: AsyncSession, project_id: str) -> None:
 
     await task_service.delete_all_tasks(session, project_id)
     await delete_revision_data_by_project(session, project_id)
+
+    # 删除项目下的角色及其别名，最后清理头像文件
+    characters = await character_repo.list_all_by_project(session, project_id)
+    await knowledge_alias_service.delete_character_aliases_by_project(session, project_id)
+    await character_repo.delete_by_project(session, project_id)
+    for character in characters:
+        if character.image_path:
+            delete_character_image(character.image_path)
+
+    # 删除项目世界书、其条目及条目别名
+    world_info = await world_info_repo.get_by_project_id(session, project_id)
+    if world_info is not None:
+        await knowledge_alias_service.delete_entry_aliases_by_world_info(
+            session, world_info.id
+        )
+        await world_info_entry_repo.delete_by_world_info(session, world_info.id)
+        await world_info_repo.delete(session, world_info)
 
     # 删除项目下的所有章节
     await chapter_repo.delete_by_project(session, project_id)
