@@ -13,6 +13,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.text_normalization import normalize_literal
+
 MAX_QUERY_CHARS = 200
 MAX_QUERY_TERMS = 8
 SEARCH_DEFAULT_LIMIT = 10
@@ -72,16 +74,6 @@ class KnowledgeErrorCode(StrEnum):
     CURSOR_STALE = "cursor_stale"
     CONTEXT_ERROR = "context_error"
     OUTPUT_BUDGET_EXCEEDED = "output_budget_exceeded"
-
-
-def normalize_literal(value: str) -> str:
-    """Apply the phase-one literal matching normalization.
-
-    Only ASCII letters are folded.  This deliberately does not promise full
-    Unicode case folding, simplified/traditional conversion, or tokenization.
-    """
-
-    return value.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
 
 
 def split_query_terms(query: str) -> tuple[str, ...]:
