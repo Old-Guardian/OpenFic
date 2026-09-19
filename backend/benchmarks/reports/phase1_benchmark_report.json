@@ -1,0 +1,303 @@
+{
+  "meta": {
+    "generated_at": "2026-09-19T10:14:37.404775+00:00",
+    "world_book_fingerprint": "sha256:2986a0b06d96b50e2702bd3defbd763fd63e5ddc6e542d83081cee063054956e",
+    "project_id": "Ljo2hytFdpC_lg-HDtsFH",
+    "world_info_id": "kdU4FNCqa7CSJPbdbYqU5",
+    "dataset_counts": {
+      "regular": {
+        "world_entries": 710,
+        "characters": 290,
+        "total": 1000,
+        "searchable": 888
+      },
+      "stress": {
+        "world_entries": 710,
+        "characters": 4290,
+        "total": 5000,
+        "searchable": 4888
+      }
+    },
+    "longest_world_entry": {
+      "id": "8tp6xKrLgX-FbiU8qyCqI",
+      "name": "[本体][额外设定]长途移动与地理参考",
+      "chars": 15534
+    },
+    "environment": {
+      "os": "Windows-11-10.0.26200-SP0",
+      "machine": "AMD64",
+      "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+      "python": "3.12.13",
+      "sqlite": "3.50.4",
+      "source_db_bytes": 3878912,
+      "regular_db_bytes": 7192576,
+      "stress_db_bytes": 46424064
+    }
+  },
+  "benchmarks": {
+    "regular": {
+      "world_search_exact_name": {
+        "timing_ms": {
+          "cold": 50.7,
+          "min": 14.561,
+          "median": 18.044,
+          "mean": 19.11,
+          "p95": 26.769,
+          "max": 32.255
+        },
+        "business_selects": 4,
+        "output_chars": 96,
+        "output_bytes": 96,
+        "estimated_tokens": 39,
+        "peak_memory_kb": 230.75,
+        "iterations": 100
+      },
+      "world_search_content_only": {
+        "timing_ms": {
+          "cold": 21.309,
+          "min": 32.35,
+          "median": 40.593,
+          "mean": 41.341,
+          "p95": 52.995,
+          "max": 62.681
+        },
+        "business_selects": 6,
+        "output_chars": 6571,
+        "output_bytes": 10605,
+        "estimated_tokens": 2629,
+        "peak_memory_kb": 316.16,
+        "iterations": 100
+      },
+      "world_search_multi_term": {
+        "timing_ms": {
+          "cold": 10.569,
+          "min": 15.386,
+          "median": 17.904,
+          "mean": 18.879,
+          "p95": 23.724,
+          "max": 34.108
+        },
+        "business_selects": 4,
+        "output_chars": 96,
+        "output_bytes": 96,
+        "estimated_tokens": 39,
+        "peak_memory_kb": 263.45,
+        "iterations": 100
+      },
+      "world_search_common_paged": {
+        "timing_ms": {
+          "cold": 19.341,
+          "min": 35.92,
+          "median": 43.997,
+          "mean": 46.138,
+          "p95": 61.503,
+          "max": 65.033
+        },
+        "business_selects": 6,
+        "output_chars": 7271,
+        "output_bytes": 11465,
+        "estimated_tokens": 2909,
+        "peak_memory_kb": 333.24,
+        "iterations": 100
+      },
+      "world_search_no_match": {
+        "timing_ms": {
+          "cold": 9.241,
+          "min": 13.42,
+          "median": 15.93,
+          "mean": 16.219,
+          "p95": 18.616,
+          "max": 21.938
+        },
+        "business_selects": 4,
+        "output_chars": 96,
+        "output_bytes": 96,
+        "estimated_tokens": 39,
+        "peak_memory_kb": 229.18,
+        "iterations": 100
+      },
+      "character_search_name": {
+        "timing_ms": {
+          "cold": 24.165,
+          "min": 28.261,
+          "median": 32.49,
+          "mean": 32.888,
+          "p95": 39.0,
+          "max": 43.273
+        },
+        "business_selects": 5,
+        "output_chars": 385,
+        "output_bytes": 405,
+        "estimated_tokens": 154,
+        "peak_memory_kb": 498.36,
+        "iterations": 100
+      },
+      "character_search_alias": {
+        "timing_ms": {
+          "cold": 21.321,
+          "min": 32.111,
+          "median": 34.624,
+          "mean": 35.364,
+          "p95": 41.649,
+          "max": 47.487
+        },
+        "business_selects": 5,
+        "output_chars": 384,
+        "output_bytes": 400,
+        "estimated_tokens": 154,
+        "peak_memory_kb": 449.22,
+        "iterations": 100
+      },
+      "character_search_content": {
+        "timing_ms": {
+          "cold": 22.783,
+          "min": 42.37,
+          "median": 45.617,
+          "mean": 46.456,
+          "p95": 51.373,
+          "max": 59.363
+        },
+        "business_selects": 5,
+        "output_chars": 1883,
+        "output_bytes": 3123,
+        "estimated_tokens": 754,
+        "peak_memory_kb": 477.59,
+        "iterations": 100
+      },
+      "world_read_bounded_10": {
+        "timing_ms": {
+          "cold": 6.376,
+          "min": 4.381,
+          "median": 5.394,
+          "mean": 5.525,
+          "p95": 6.653,
+          "max": 7.872
+        },
+        "business_selects": 2,
+        "output_chars": 9196,
+        "output_bytes": 18532,
+        "estimated_tokens": 3679,
+        "peak_memory_kb": 197.68,
+        "iterations": 100
+      },
+      "character_read_bounded_10": {
+        "timing_ms": {
+          "cold": 6.862,
+          "min": 4.946,
+          "median": 5.839,
+          "mean": 6.175,
+          "p95": 8.454,
+          "max": 9.359
+        },
+        "business_selects": 2,
+        "output_chars": 11830,
+        "output_bytes": 26500,
+        "estimated_tokens": 4732,
+        "peak_memory_kb": 267.24,
+        "iterations": 100
+      },
+      "world_read_longest_truncated": {
+        "timing_ms": {
+          "cold": 2.75,
+          "min": 3.843,
+          "median": 4.943,
+          "mean": 5.058,
+          "p95": 6.494,
+          "max": 7.39
+        },
+        "business_selects": 2,
+        "output_chars": 8592,
+        "output_bytes": 8742,
+        "estimated_tokens": 3437,
+        "peak_memory_kb": 218.88,
+        "iterations": 100
+      }
+    },
+    "stress": {
+      "character_search_name": {
+        "timing_ms": {
+          "cold": 212.815,
+          "min": 228.357,
+          "median": 244.908,
+          "mean": 254.044,
+          "p95": 295.836,
+          "max": 432.175
+        },
+        "business_selects": 5,
+        "output_chars": 372,
+        "output_bytes": 392,
+        "estimated_tokens": 149,
+        "peak_memory_kb": 1658.03,
+        "iterations": 100
+      },
+      "character_search_alias": {
+        "timing_ms": {
+          "cold": 193.164,
+          "min": 231.719,
+          "median": 273.351,
+          "mean": 287.232,
+          "p95": 406.931,
+          "max": 481.388
+        },
+        "business_selects": 5,
+        "output_chars": 371,
+        "output_bytes": 387,
+        "estimated_tokens": 149,
+        "peak_memory_kb": 1657.97,
+        "iterations": 100
+      },
+      "character_search_content": {
+        "timing_ms": {
+          "cold": 266.744,
+          "min": 276.462,
+          "median": 307.906,
+          "mean": 319.268,
+          "p95": 396.93,
+          "max": 470.887
+        },
+        "business_selects": 5,
+        "output_chars": 6531,
+        "output_bytes": 10699,
+        "estimated_tokens": 2613,
+        "peak_memory_kb": 1661.05,
+        "iterations": 100
+      },
+      "world_search_exact_name": {
+        "timing_ms": {
+          "cold": 13.27,
+          "min": 14.927,
+          "median": 16.921,
+          "mean": 17.657,
+          "p95": 22.295,
+          "max": 29.945
+        },
+        "business_selects": 4,
+        "output_chars": 96,
+        "output_bytes": 96,
+        "estimated_tokens": 39,
+        "peak_memory_kb": 228.17,
+        "iterations": 100
+      },
+      "world_search_content_only": {
+        "timing_ms": {
+          "cold": 25.535,
+          "min": 33.194,
+          "median": 37.441,
+          "mean": 38.322,
+          "p95": 44.653,
+          "max": 52.376
+        },
+        "business_selects": 6,
+        "output_chars": 6571,
+        "output_bytes": 10605,
+        "estimated_tokens": 2629,
+        "peak_memory_kb": 322.44,
+        "iterations": 100
+      }
+    }
+  },
+  "verification": {
+    "passed": true,
+    "violations": []
+  }
+}
