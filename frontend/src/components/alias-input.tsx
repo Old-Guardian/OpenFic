@@ -73,7 +73,7 @@ export function AliasInput({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (disabled) return;
+      if (disabled || e.nativeEvent.isComposing || e.key === "Process") return;
 
       if (e.key === "Enter" || e.key === "," || e.key === "，") {
         e.preventDefault();
