@@ -180,7 +180,7 @@ class KnowledgeCursorPayload(_ContractModel):
     project_id: str = Field(min_length=1, max_length=200)
     query_fingerprint: str = Field(pattern=_SHA256_PATTERN)
     dataset_fingerprint: str = Field(pattern=_SHA256_PATTERN)
-    limit: int = Field(ge=1, le=SEARCH_MAX_LIMIT)
+    limit: int = Field(ge=1, le=LEGACY_LIST_MAX_LIMIT)
     offset: int = Field(ge=0, le=MAX_CURSOR_OFFSET)
 
 
