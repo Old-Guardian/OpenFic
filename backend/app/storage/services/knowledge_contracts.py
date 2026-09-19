@@ -4,11 +4,18 @@ The search and read services are implemented in later tasks.  Keeping their
 wire contracts here lets those implementations, Agent tools, and UI fixtures
 share one validation boundary instead of gradually inventing incompatible
 payloads.
+
+Shared helpers that define the *meaning* of contract fields (query term
+splitting, content versions, excerpt/read line numbers) live here too, so the
+search and read services cannot drift apart on a frozen semantic.
 """
 
 from __future__ import annotations
 
+import bisect
+from collections.abc import Sequence
 from enum import StrEnum
+import hashlib
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -88,6 +95,59 @@ def split_query_terms(query: str) -> tuple[str, ...]:
         seen.add(normalized)
         terms.append(term)
     return tuple(terms)
+
+
+def compute_content_version(content: str | None) -> str:
+    """Hash the raw UTF-8 bytes of the original content (§6.1).
+
+    The result is a正文一致性校验标识, not a plot version or a permanent cache
+    key.  ``None`` and ``""`` deliberately share one version.
+    """
+
+    raw = (content or "").encode("utf-8")
+    return f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
+
+def build_line_offsets(content: str) -> list[tuple[int, int]]:
+    """Return each logical line's ``[start, end)`` range.
+
+    Lines follow ``str.splitlines(keepends=True)`` so CRLF, lone ``\\r`` and
+    the other Unicode line boundaries used by the frozen protocol all agree
+    between excerpts and batch reads.
+    """
+
+    if not content:
+        return []
+    offsets: list[tuple[int, int]] = []
+    current = 0
+    for line in content.splitlines(keepends=True):
+        line_len = len(line)
+        offsets.append((current, current + line_len))
+        current += line_len
+    return offsets
+
+
+def get_line_number(line_offsets: Sequence[tuple[int, int]], char_index: int) -> int:
+    """Map a character offset to its 1-based line number."""
+
+    if not line_offsets:
+        return 1
+    idx = bisect.bisect_right(line_offsets, (char_index, float("inf"))) - 1
+    if idx < 0:
+        return 1
+    if idx >= len(line_offsets):
+        return len(line_offsets)
+    return idx + 1
+
+
+def locate_line_and_offset(content: str, char_index: int) -> tuple[int, int]:
+    """Return the 1-based line and 0-based inline offset of a character index."""
+
+    line_offsets = build_line_offsets(content)
+    line = get_line_number(line_offsets, char_index)
+    if not line_offsets:
+        return line, char_index
+    return line, char_index - line_offsets[line - 1][0]
 
 
 class KnowledgeSearchRequest(_ContractModel):

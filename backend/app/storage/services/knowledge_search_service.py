@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import base64
-import bisect
 from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime
@@ -45,6 +44,9 @@ from app.storage.services.knowledge_contracts import (
     SearchExcerpt,
     SearchMatchMode,
     SearchReason,
+    build_line_offsets,
+    compute_content_version,
+    get_line_number,
 )
 
 
@@ -111,12 +113,6 @@ def compute_dataset_fingerprint(rows: Sequence[tuple[str, datetime | str]]) -> s
         )
         hasher.update(f"{entity_id}:{ts}\n".encode("utf-8"))
     return f"sha256:{hasher.hexdigest()}"
-
-
-def compute_content_version(content: str | None) -> str:
-    """计算正文原始 UTF-8 字节的 SHA-256 版本标识。"""
-    raw = (content or "").encode("utf-8")
-    return f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
 
 def encode_cursor(payload: KnowledgeCursorPayload) -> str:
@@ -200,32 +196,6 @@ def validate_cursor(
             retryable=True,
         )
     return payload.offset
-
-
-def _build_line_offsets(content: str) -> list[tuple[int, int]]:
-    """遵循 splitlines(keepends=True) 逻辑构建每一行的字符偏移范围 [start, end)。"""
-    if not content:
-        return []
-    lines = content.splitlines(keepends=True)
-    offsets: list[tuple[int, int]] = []
-    current = 0
-    for line in lines:
-        line_len = len(line)
-        offsets.append((current, current + line_len))
-        current += line_len
-    return offsets
-
-
-def _get_line_number(line_offsets: list[tuple[int, int]], char_index: int) -> int:
-    """根据字符偏移查找 1-indexed 行号。"""
-    if not line_offsets:
-        return 1
-    idx = bisect.bisect_right(line_offsets, (char_index, float("inf"))) - 1
-    if idx < 0:
-        return 1
-    if idx >= len(line_offsets):
-        return len(line_offsets)
-    return idx + 1
 
 
 def extract_excerpts(
@@ -318,12 +288,12 @@ def extract_excerpts(
     all_covered = all(is_covered(pos, end) for pos, end, _ in all_occurrences)
     excerpts_truncated = not all_covered
 
-    line_offsets = _build_line_offsets(content)
+    line_offsets = build_line_offsets(content)
     excerpts: list[SearchExcerpt] = []
     for ws, we in final_windows:
         excerpt_text = content[ws:we]
-        line_start = _get_line_number(line_offsets, ws)
-        line_end = _get_line_number(line_offsets, max(ws, we - 1))
+        line_start = get_line_number(line_offsets, ws)
+        line_end = get_line_number(line_offsets, max(ws, we - 1))
         excerpts.append(
             SearchExcerpt(
                 text=excerpt_text,

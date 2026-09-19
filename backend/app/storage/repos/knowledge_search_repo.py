@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Knowledge Search Repository - 世界书与角色的底层 SQL 检索层。
 
-依据第一阶段实施方案 §5.3 与 §8：
+依据第一阶段实施方案 §5.3、§6.1 与 §8：
 - 使用 SQLite 参数化 `instr(lower(column), :term) > 0` 进行字面子串匹配；
 - 别名使用 EXISTS 子查询，避免 JOIN 导致结果膨胀与重复；
 - 5 档稳定排序：
@@ -11,7 +11,9 @@
     4. 别名包含任意查询词
     5. 仅正文命中
     6. 同档按命中词数量降序，再按实体 ID 升序
-- 两阶段分页：先在数据库统计总数与分页切片，再批量加载当前页正文及别名。
+- 两阶段分页：先在数据库统计总数与分页切片，再批量加载当前页正文及别名；
+- 批量读取按项目作用域一次取回目标实体（含禁用项），供读取服务区分
+  `disabled` 与 `not_found`，不做逐项查询。
 """
 
 from __future__ import annotations
@@ -314,4 +316,47 @@ async def search_characters_page(
         .offset(offset)
     )
     result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_world_entries_for_read(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    entry_ids: Sequence[str],
+) -> list[WorldInfoEntry]:
+    """按当前项目作用域批量获取世界书条目。
+
+    同时返回启用与禁用条目：调用方需要据此区分 ``disabled`` 与
+    ``not_found``，而其他项目的条目必须表现为不存在。一次查询完成作用域
+    过滤，不做逐项查询。
+    """
+    if not entry_ids:
+        return []
+    result = await session.execute(
+        select(WorldInfoEntry)
+        .join(WorldInfo, col(WorldInfo.id) == col(WorldInfoEntry.world_info_id))
+        .where(
+            col(WorldInfo.project_id) == project_id,
+            col(WorldInfoEntry.id).in_(entry_ids),
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def get_characters_for_read(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    character_ids: Sequence[str],
+) -> list[Character]:
+    """按当前项目作用域批量获取角色，不做逐项查询。"""
+    if not character_ids:
+        return []
+    result = await session.execute(
+        select(Character).where(
+            col(Character.project_id) == project_id,
+            col(Character.id).in_(character_ids),
+        )
+    )
     return list(result.scalars().all())
