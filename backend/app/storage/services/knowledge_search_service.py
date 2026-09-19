@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import OpenFicError
 from app.core.text_normalization import normalize_literal
+from app.storage.database import read_snapshot
 from app.storage.repos import (
     character_alias_repo,
     character_repo,
@@ -707,11 +708,9 @@ async def search_world_entries(
     project_id: str,
     request: KnowledgeSearchRequest,
 ) -> KnowledgeSearchResponse:
-    """检索世界书条目。如果当前 session 未处于事务中，显式开启只读事务快照。"""
-    if not session.in_transaction():
-        async with session.begin():
-            return await _do_search_world_entries(session, project_id, request)
-    return await _do_search_world_entries(session, project_id, request)
+    """检索世界书条目，指纹、计数与当前页共享同一读快照。"""
+    async with read_snapshot(session):
+        return await _do_search_world_entries(session, project_id, request)
 
 
 async def search_characters(
@@ -719,11 +718,9 @@ async def search_characters(
     project_id: str,
     request: KnowledgeSearchRequest,
 ) -> KnowledgeSearchResponse:
-    """检索角色。如果当前 session 未处于事务中，显式开启只读事务快照。"""
-    if not session.in_transaction():
-        async with session.begin():
-            return await _do_search_characters(session, project_id, request)
-    return await _do_search_characters(session, project_id, request)
+    """检索角色，指纹、计数与当前页共享同一读快照。"""
+    async with read_snapshot(session):
+        return await _do_search_characters(session, project_id, request)
 
 
 # ============== 旧列表工具的启用项目录分页（§7.1） ==============
@@ -835,6 +832,20 @@ async def list_world_entries(
     limit: int,
     cursor: str | None = None,
 ) -> KnowledgeListPage:
+    """分页枚举项目世界书中的启用条目，指纹、计数与当前页共享同一读快照。"""
+    async with read_snapshot(session):
+        return await _do_list_world_entries(
+            session, project_id, limit=limit, cursor=cursor
+        )
+
+
+async def _do_list_world_entries(
+    session: AsyncSession,
+    project_id: str,
+    *,
+    limit: int,
+    cursor: str | None = None,
+) -> KnowledgeListPage:
     """分页枚举项目世界书中的启用条目，按 order 稳定排序。"""
     project_exists = await knowledge_search_repo.check_project_exists(session, project_id)
     if not project_exists:
@@ -887,6 +898,18 @@ async def list_world_entries(
 
 
 async def list_characters(
+    session: AsyncSession,
+    project_id: str,
+    *,
+    limit: int,
+    cursor: str | None = None,
+) -> KnowledgeListPage:
+    """分页枚举项目角色，指纹、计数与当前页共享同一读快照。"""
+    async with read_snapshot(session):
+        return await _do_list_characters(session, project_id, limit=limit, cursor=cursor)
+
+
+async def _do_list_characters(
     session: AsyncSession,
     project_id: str,
     *,

@@ -20,6 +20,7 @@ import json
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import OpenFicError
+from app.storage.database import read_snapshot
 from app.storage.repos import knowledge_search_repo
 from app.storage.services.knowledge_contracts import (
     READ_CONTENT_BUDGET_CHARS,
@@ -322,13 +323,11 @@ async def read_world_entries(
     project_id: str,
     request: KnowledgeReadRequest,
 ) -> KnowledgeReadResponse:
-    """按 ID 批量读取世界书条目。session 未处于事务中时显式开启读事务快照。"""
-    if not session.in_transaction():
-        async with session.begin():
-            return await _do_read(
-                session, project_id, request, kind=KnowledgeKind.WORLD_ENTRY
-            )
-    return await _do_read(session, project_id, request, kind=KnowledgeKind.WORLD_ENTRY)
+    """按 ID 批量读取世界书条目，版本校验与正文读取共享同一读快照。"""
+    async with read_snapshot(session):
+        return await _do_read(
+            session, project_id, request, kind=KnowledgeKind.WORLD_ENTRY
+        )
 
 
 async def read_characters(
@@ -336,10 +335,6 @@ async def read_characters(
     project_id: str,
     request: KnowledgeReadRequest,
 ) -> KnowledgeReadResponse:
-    """按 ID 批量读取角色。session 未处于事务中时显式开启读事务快照。"""
-    if not session.in_transaction():
-        async with session.begin():
-            return await _do_read(
-                session, project_id, request, kind=KnowledgeKind.CHARACTER
-            )
-    return await _do_read(session, project_id, request, kind=KnowledgeKind.CHARACTER)
+    """按 ID 批量读取角色，版本校验与正文读取共享同一读快照。"""
+    async with read_snapshot(session):
+        return await _do_read(session, project_id, request, kind=KnowledgeKind.CHARACTER)
