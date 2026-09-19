@@ -33,6 +33,7 @@ interface WorldEntryDiffPreview {
   entry_id?: string;
   entry_title?: string;
   sections: ChapterDiffSection[];
+  aliases?: { added?: string[]; removed?: string[] };
 }
 
 const COPY_FEEDBACK_MS = 1200;
@@ -55,9 +56,24 @@ function getWorldEntryDiffPreview(message: AgentMessage): WorldEntryDiffPreview 
   const rawPreview = metadata.world_entry_diff;
   if (!isRecord(rawPreview) || !Array.isArray(rawPreview.sections)) return null;
 
+  const rawAliases = isRecord(rawPreview.aliases) ? rawPreview.aliases : null;
+  const aliasesAdded =
+    rawAliases && Array.isArray(rawAliases.added)
+      ? (rawAliases.added as string[]).filter((s) => typeof s === "string")
+      : undefined;
+  const aliasesRemoved =
+    rawAliases && Array.isArray(rawAliases.removed)
+      ? (rawAliases.removed as string[]).filter((s) => typeof s === "string")
+      : undefined;
+  const aliases =
+    aliasesAdded?.length || aliasesRemoved?.length
+      ? { added: aliasesAdded, removed: aliasesRemoved }
+      : undefined;
+
   return {
     entry_id: asString(rawPreview.entry_id),
     entry_title: asString(rawPreview.entry_title),
+    aliases,
     sections: rawPreview.sections
       .filter(isRecord)
       .map((section) => {
@@ -99,7 +115,13 @@ export function WorldEntryToolMessage({ message }: WorldEntryToolMessageProps) {
   if (diffPreview) {
     const contentSection =
       diffPreview.sections.find((section) => section.type === "content") ?? null;
-    const changeSummary = summarizeChapterDiffSection(contentSection);
+    const bodySummary = summarizeChapterDiffSection(contentSection);
+    const aliasAddedCount = diffPreview.aliases?.added?.length ?? 0;
+    const aliasRemovedCount = diffPreview.aliases?.removed?.length ?? 0;
+    const changeSummary = {
+      added: bodySummary.added + aliasAddedCount,
+      removed: bodySummary.removed + aliasRemovedCount,
+    };
     const copyText = buildChapterDiffCopyText(contentSection);
 
     const handleCopy = async () => {
@@ -198,11 +220,33 @@ export function WorldEntryToolMessage({ message }: WorldEntryToolMessageProps) {
                       <span className="agent-chapter-diff-text">{line.text || " "}</span>
                     </div>
                   ))
-                ) : (
+                ) : !diffPreview.aliases ? (
                   <div className="agent-chapter-diff-empty">
                     {i18n.t("assistant.tools.noBodyDiff")}
                   </div>
-                )}
+                ) : null}
+                {diffPreview.aliases ? (
+                  <>
+                    <div className="agent-chapter-diff-line" data-type="context">
+                      <span className="agent-chapter-diff-gutter" />
+                      <span className="agent-chapter-diff-text" style={{ fontWeight: 600 }}>
+                        {i18n.t("assistant.tools.aliasesSectionTitle")}
+                      </span>
+                    </div>
+                    {diffPreview.aliases.added?.map((alias, i) => (
+                      <div key={`alias-add-${i}`} className="agent-chapter-diff-line" data-type="added">
+                        <span className="agent-chapter-diff-gutter">+</span>
+                        <span className="agent-chapter-diff-text">{alias}</span>
+                      </div>
+                    ))}
+                    {diffPreview.aliases.removed?.map((alias, i) => (
+                      <div key={`alias-rm-${i}`} className="agent-chapter-diff-line" data-type="removed">
+                        <span className="agent-chapter-diff-gutter">−</span>
+                        <span className="agent-chapter-diff-text">{alias}</span>
+                      </div>
+                    ))}
+                  </>
+                ) : null}
               </div>
             </Box>
           </Box>

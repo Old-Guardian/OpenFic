@@ -10,6 +10,7 @@ from app.storage.services import (
     character_service,
     chapter_service,
     import_service,
+    knowledge_alias_service,
     mention_service,
     note_service,
     note_transfer_service,
@@ -22,6 +23,8 @@ from app.storage.services import (
     writing_activity_service,
     world_info_entry_service,
     world_info_service,
+    knowledge_read_service,
+    knowledge_search_service,
 )
 
 __all__ = [
@@ -31,6 +34,7 @@ __all__ = [
     "character_service",
     "chapter_service",
     "import_service",
+    "knowledge_alias_service",
     "mention_service",
     "note_service",
     "note_transfer_service",
@@ -43,4 +47,6 @@ __all__ = [
     "writing_activity_service",
     "world_info_entry_service",
     "world_info_service",
+    "knowledge_read_service",
+    "knowledge_search_service",
 ]

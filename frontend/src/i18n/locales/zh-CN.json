@@ -56,6 +56,19 @@
     "swUpdated": "应用已更新，点击刷新",
     "refresh": "刷新"
   },
+  "aliases": {
+    "label": "别名",
+    "placeholder": "添加别名，按 Enter 确认...",
+    "add": "添加",
+    "count": "别名 ({{count}}/{{max}})",
+    "empty": "别名不能为空",
+    "tooLong": "单个别名不能超过 {{max}} 个字符",
+    "maxReached": "每个条目最多 {{max}} 个别名",
+    "duplicate": "该别名已存在",
+    "sameAsName": "别名不能与正式名称相同",
+    "clearAll": "清空全部别名",
+    "remove": "删除别名 {{alias}}"
+  },
   "auth": {
     "passwordPlaceholder": "请输入密码",
     "submit": "登录",
@@ -806,6 +819,14 @@
         "name": "读取角色",
         "description": "读取一个指定角色的信息"
       },
+      "searchCharacters": {
+        "name": "搜索角色",
+        "description": "在项目角色中按关键词搜索角色设定"
+      },
+      "readCharacters": {
+        "name": "批量读取角色",
+        "description": "按 ID 批量分段读取角色完整描述"
+      },
       "createCharacter": {
         "name": "创建角色",
         "description": "创建一个新角色"
@@ -825,6 +846,14 @@
       "readWorldEntry": {
         "name": "读取世界书条目",
         "description": "读取一个指定的世界书条目内容"
+      },
+      "searchWorldEntries": {
+        "name": "搜索世界书",
+        "description": "在项目世界书启用条目中按关键词搜索设定"
+      },
+      "readWorldEntries": {
+        "name": "批量读取世界书",
+        "description": "按 ID 批量分段读取世界书条目正文"
       },
       "createWorldEntry": {
         "name": "创建世界书条目",
@@ -2186,6 +2215,9 @@
       "noDiffToCopy": "没有可复制的正文 Diff",
       "titleOnlyChange": "本次仅变更章节标题。",
       "noBodyDiff": "无可显示正文差异。",
+      "aliasesAdded": "新增",
+      "aliasesRemoved": "删除",
+      "aliasesSectionTitle": "别名",
       "noContentToDisplay": "暂无可显示内容",
       "noVolumeInfoReturned": "未返回新卷信息",
       "noVolumeInfoDescription": "这次创建没有返回可显示的卷信息。",
@@ -2292,7 +2324,53 @@
       "find": "查找",
       "replaceWith": "替换为",
       "result": "结果",
-      "toolApprovalQuestion": "是否允许调用 {{toolName}}？"
+      "toolApprovalQuestion": "是否允许调用 {{toolName}}？",
+      "searchWorldEntries": "搜索世界书",
+      "searchCharacters": "搜索角色",
+      "readWorldEntries": "批量读取世界书",
+      "readCharacters": "批量读取角色",
+      "searchQuery": "关键词",
+      "matchAll": "全部匹配",
+      "matchAny": "任一匹配",
+      "searchMatchesTotal": "共 {{total}} 个匹配（本次返回 {{count}} 个）",
+      "noWorldBookBound": "当前项目未绑定世界书",
+      "noKnowledgeSearchResults": "未找到与关键词匹配的内容",
+      "noKnowledgeSearchResultsHint": "建议尝试别名、减少关键词或改用任一匹配（match=\"any\"）",
+      "fieldName": "名称",
+      "fieldAlias": "别名",
+      "fieldContent": "正文",
+      "aliasesLabel": "别名",
+      "excerptLine": "第 {{line}} 行",
+      "excerptLineRange": "第 {{start}}-{{end}} 行",
+      "charOffsetRange": "偏移 {{start}}-{{end}}",
+      "excerptsTruncatedNotice": "正文还有更多匹配片段（已截断显示，可用读取工具获取完整原文）",
+      "hasMoreSearchResults": "还有更多结果待翻页（has_more: true，共 {{total}} 条），可使用 next_cursor 继续获取",
+      "batchReadSuccess": "{{count}} 项读取成功",
+      "batchReadPartialFailure": "部分读取失败（{{ok}} 项成功，{{failed}} 项异常）",
+      "batchReadBudgetExhausted": "总预算耗尽",
+      "partialFailureNotice": "本次批量读取中部分条目未成功返回，请查看下方单项状态。这不是整批调用失败。",
+      "budgetExhaustedNotice": "本次读取触发了正文或序列化预算上限，部分条目暂未读取。条目仍然存在，可单独或缩小批次重试。",
+      "readRangeMeta": "区间 {{start}} - {{end}} / 共 {{total}} 字符 · 第 {{line}} 行",
+      "truncatedNotice": "正文未读完（截断）",
+      "truncatedContinuationHint": "正文未读完（已读至第 {{end}} / {{total}} 字符）。下次需从 offset: {{nextOffset}} 续读，并指定版本 {{version}}。",
+      "readStatus": {
+        "ok": "读取成功",
+        "truncated": "已截断",
+        "notFound": "未找到",
+        "disabled": "已禁用",
+        "versionConflict": "版本冲突",
+        "invalidRange": "范围越界",
+        "budgetExhausted": "预算耗尽"
+      },
+      "readStatusDesc": {
+        "notFound": "该条目不存在或不属于当前项目。",
+        "disabled": "该条目在管理界面中被禁用，Agent 工具无法访问。可在世界书管理界面重新启用。",
+        "versionConflict": "正文在两次读取之间发生了修改（版本不一致）。请从 start_offset=0 重新读取最新正文。",
+        "invalidRange": "请求的起始偏移超出了正文总长度（总共 {{total}} 字符）。",
+        "budgetExhausted": "因达到输出预算上限，本次未能读取该项内容。条目仍然存在，可单独发起读取或减少同批次条目数。"
+      },
+      "pagedItemCountWithMore": "{{count}} / {{total}} 项（还有更多）",
+      "pagedItemCount": "{{count}} / {{total}} 项"
     }
   },
   "settingsExtra": {

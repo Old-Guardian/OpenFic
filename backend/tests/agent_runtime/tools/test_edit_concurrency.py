@@ -286,8 +286,16 @@ async def test_edit_world_entry_reads_and_writes_inside_lock() -> None:
             side_effect=get_world_info,
         ),
         patch(
-            "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_repo.list_all_by_world_info",
+            "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_repo.list_by_name",
             new=AsyncMock(return_value=[entry]),
+        ),
+        patch(
+            "app.agent_runtime.tools.impls.context.world_entry.knowledge_alias_service.list_entry_aliases",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "app.agent_runtime.revisions.world_info_entry_alias_repo.list_by_entries",
+            new=AsyncMock(return_value=[]),
         ),
         patch(
             "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_service.update_entry",

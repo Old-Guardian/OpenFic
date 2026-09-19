@@ -806,6 +806,14 @@
         "name": "Read Character",
         "description": "Read information for a specified character."
       },
+      "searchCharacters": {
+        "name": "Search Characters",
+        "description": "Search characters in the current project by keywords."
+      },
+      "readCharacters": {
+        "name": "Read Characters",
+        "description": "Batch read character descriptions by IDs."
+      },
       "createCharacter": {
         "name": "Create Character",
         "description": "Create a new character."
@@ -825,6 +833,14 @@
       "readWorldEntry": {
         "name": "Read World Entry",
         "description": "Read the content of a specified worldbook entry."
+      },
+      "searchWorldEntries": {
+        "name": "Search World Entries",
+        "description": "Search worldbook entries in the current project by keywords."
+      },
+      "readWorldEntries": {
+        "name": "Read World Entries",
+        "description": "Batch read worldbook entries content by IDs."
       },
       "createWorldEntry": {
         "name": "Create World Entry",
@@ -2123,6 +2139,9 @@
       "noDiffToCopy": "No body diff available to copy",
       "titleOnlyChange": "Only the chapter title changed this time.",
       "noBodyDiff": "No body diff available to display.",
+      "aliasesAdded": "Added",
+      "aliasesRemoved": "Removed",
+      "aliasesSectionTitle": "Aliases",
       "noContentToDisplay": "No displayable content",
       "noVolumeInfoReturned": "No new volume info returned",
       "noVolumeInfoDescription": "This creation did not return any displayable volume information.",
@@ -2229,7 +2248,53 @@
       "find": "Find",
       "replaceWith": "Replace with",
       "result": "Result",
-      "toolApprovalQuestion": "Allow calling {{toolName}}?"
+      "toolApprovalQuestion": "Allow calling {{toolName}}?",
+      "searchWorldEntries": "Search World Entries",
+      "searchCharacters": "Search Characters",
+      "readWorldEntries": "Batch Read World Entries",
+      "readCharacters": "Batch Read Characters",
+      "searchQuery": "Query",
+      "matchAll": "All terms",
+      "matchAny": "Any term",
+      "searchMatchesTotal": "{{total}} total matches (showing {{count}})",
+      "noWorldBookBound": "No worldbook bound to current project",
+      "noKnowledgeSearchResults": "No content matching keywords",
+      "noKnowledgeSearchResultsHint": "Try aliases, fewer keywords, or match=\"any\"",
+      "fieldName": "Name",
+      "fieldAlias": "Alias",
+      "fieldContent": "Content",
+      "aliasesLabel": "Aliases",
+      "excerptLine": "Line {{line}}",
+      "excerptLineRange": "Lines {{start}}-{{end}}",
+      "charOffsetRange": "Offset {{start}}-{{end}}",
+      "excerptsTruncatedNotice": "More matching excerpts exist in content (truncated, use read tool for full content)",
+      "hasMoreSearchResults": "More results available (has_more: true, {{total}} total), continue with next_cursor",
+      "batchReadSuccess": "{{count}} items read successfully",
+      "batchReadPartialFailure": "Partial read failure ({{ok}} succeeded, {{failed}} failed)",
+      "batchReadBudgetExhausted": "Budget exhausted",
+      "partialFailureNotice": "Some items in this batch could not be returned. See item statuses below. This is not a total failure.",
+      "budgetExhaustedNotice": "Output budget limit was reached; some items were not read. Items still exist and can be retried individually or in smaller batches.",
+      "readRangeMeta": "Range {{start}} - {{end}} / {{total}} chars · Line {{line}}",
+      "truncatedNotice": "Content truncated",
+      "truncatedContinuationHint": "Content incomplete (read up to char {{end}} / {{total}}). Continue from offset: {{nextOffset}} with version: {{version}}.",
+      "readStatus": {
+        "ok": "Read successfully",
+        "truncated": "Truncated",
+        "notFound": "Not found",
+        "disabled": "Disabled",
+        "versionConflict": "Version conflict",
+        "invalidRange": "Range invalid",
+        "budgetExhausted": "Budget exhausted"
+      },
+      "readStatusDesc": {
+        "notFound": "This item was not found or does not belong to the current project.",
+        "disabled": "This item is disabled in the admin interface and cannot be accessed by Agent tools.",
+        "versionConflict": "The content was modified between reads (version mismatch). Please re-read from start_offset=0.",
+        "invalidRange": "The requested start offset exceeds total content length ({{total}} chars).",
+        "budgetExhausted": "Could not read item due to serialized output budget limit. The item still exists and can be retried individually."
+      },
+      "pagedItemCountWithMore": "{{count}} / {{total}} items (more available)",
+      "pagedItemCount": "{{count}} / {{total}} items"
     }
   },
   "settingsExtra": {

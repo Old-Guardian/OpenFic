@@ -10,7 +10,7 @@ import type { Editor } from "@tiptap/react";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
-import { MarkdownEditor } from "@/components";
+import { AliasInput, MarkdownEditor } from "@/components";
 import { toast } from "@/components/toast";
 import { updateWorldInfoEntry } from "@/lib/api-client";
 import {
@@ -57,12 +57,14 @@ export function EntryEditor({
   const queryClient = useQueryClient();
 
   const [name, setName] = useState(entry.name);
+  const [aliases, setAliases] = useState<string[]>(entry.aliases ?? []);
   const [tokenCount, setTokenCount] = useState<number>(entry.tokenCount || 0);
   const [hasChanges, setHasChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   const savedContentRef = useRef(entry.content);
   const savedNameRef = useRef(entry.name);
+  const savedAliasesRef = useRef<string[]>(entry.aliases ?? []);
   const hasChangesRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isSavingRef = useRef(false);
@@ -102,6 +104,7 @@ export function EntryEditor({
                     ...item,
                     name: updated.name,
                     tokenCount: updated.tokenCount,
+                    aliases: updated.aliases ?? [],
                   }
                 : item,
             ),
@@ -119,6 +122,7 @@ export function EntryEditor({
 
     const content = savedContentRef.current;
     const newName = savedNameRef.current.trim();
+    const nextAliases = savedAliasesRef.current;
     const contentLimit = getEditorContentLimit(content);
     if (!contentLimit.isWithinLimit) {
       showContentLimitToast(content);
@@ -143,10 +147,17 @@ export function EntryEditor({
         name: newName,
         content,
         tokenCount: newTokenCount,
+        aliases: nextAliases,
       });
       updateCaches(updated);
       hasChangesRef.current = false;
       setHasChanges(false);
+    } catch (error) {
+      hasChangesRef.current = true;
+      setHasChanges(true);
+      const detail = (error as { response?: { data?: { detail?: string } } }).response?.data
+        ?.detail;
+      toast.error(detail || t("common.saveFailed"));
     } finally {
       isSavingRef.current = false;
       setIsSaving(false);
@@ -166,6 +177,17 @@ export function EntryEditor({
     (newName: string) => {
       setName(newName);
       savedNameRef.current = newName;
+      hasChangesRef.current = true;
+      setHasChanges(true);
+      triggerAutoSave();
+    },
+    [triggerAutoSave],
+  );
+
+  const handleAliasesChange = useCallback(
+    (nextAliases: string[]) => {
+      setAliases(nextAliases);
+      savedAliasesRef.current = nextAliases;
       hasChangesRef.current = true;
       setHasChanges(true);
       triggerAutoSave();
@@ -209,11 +231,13 @@ export function EntryEditor({
         name: savedNameRef.current,
         content: savedContentRef.current,
         tokenCount,
+        aliases: savedAliasesRef.current,
       },
       {
         name: entry.name,
         content: entry.content,
         tokenCount: entry.tokenCount || 0,
+        aliases: entry.aliases ?? [],
       },
       hasChangesRef.current,
     );
@@ -221,9 +245,11 @@ export function EntryEditor({
 
     savedNameRef.current = nextState.name;
     savedContentRef.current = nextState.content;
+    savedAliasesRef.current = nextState.aliases;
     setName(nextState.name);
     setTokenCount(nextState.tokenCount);
-  }, [entry.content, entry.name, entry.tokenCount, tokenCount]);
+    setAliases(nextState.aliases);
+  }, [entry.aliases, entry.content, entry.name, entry.tokenCount, tokenCount]);
 
   useEffect(() => {
     if (scrollToLine == null || scrollToLine < 1 || scrolledRef.current) return;
@@ -262,6 +288,14 @@ export function EntryEditor({
     <MarkdownEditor
       title={name}
       onTitleChange={handleTitleChange}
+      belowTitle={
+        <AliasInput
+          aliases={aliases}
+          onChange={handleAliasesChange}
+          entityName={name}
+          disabled={isAgentLocked}
+        />
+      }
       content={entry.content}
       onContentChange={handleContentChange}
       onSave={handleSave}

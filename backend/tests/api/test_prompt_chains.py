@@ -225,3 +225,61 @@ class TestPromptChainAPI:
                 "line_text": "关键字条目",
             },
         ]
+
+    async def test_builtin_agents_default_prompts_include_retrieval_guidance(
+        self, client: AsyncClient
+    ) -> None:
+        for agent_name in (
+            "actor",
+            "auditor",
+            "build",
+            "composer",
+            "explore",
+            "plan",
+            "reviewer",
+            "writer",
+        ):
+            response = await client.get(
+                f"/api/v1/prompt-chains/builtin-agent--{agent_name}/versions/default"
+            )
+            assert response.status_code == 200
+            entries = response.json()["entries"]
+            guidance = next(
+                (entry for entry in entries if entry["name"] == "检索与阅读设定"),
+                None,
+            )
+            assert guidance is not None, agent_name
+            assert "search_world_entries" in guidance["content"]
+            assert "has_more" in guidance["content"]
+            assert "truncated" in guidance["content"]
+            assert "match=any" in guidance["content"]
+
+    async def test_customized_builtin_agent_version_survives_yaml_defaults(
+        self, client: AsyncClient
+    ) -> None:
+        prompt_id = "builtin-agent--explore"
+        default_response = await client.get(
+            f"/api/v1/prompt-chains/{prompt_id}/versions/default"
+        )
+        assert default_response.status_code == 200
+        default_data = default_response.json()
+
+        create_response = await client.post(
+            f"/api/v1/prompt-chains/{prompt_id}/versions",
+            json={
+                "parent_version_id": "default",
+                "entries": [
+                    {**entry, "content": f"{entry['content']}\n用户自定义内容"}
+                    for entry in default_data["entries"]
+                ],
+            },
+        )
+        assert create_response.status_code == 201
+
+        latest = await client.get(f"/api/v1/prompt-chains/{prompt_id}/versions/latest")
+        assert latest.status_code == 200
+        latest_data = latest.json()
+        assert latest_data["version"]["version_number"] >= 1
+        assert any(
+            "用户自定义内容" in entry["content"] for entry in latest_data["entries"]
+        )

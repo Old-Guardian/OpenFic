@@ -23,6 +23,7 @@ import {
   PenLine,
   Sparkles,
   Trash2,
+  UserSearch,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 /* oxlint-disable react-refresh/only-export-components */
@@ -35,6 +36,14 @@ import type { AgentMessage } from "@/lib/agent.types";
 import { AskUserToolMessage } from "../ask-user/ask-user-tool-message";
 import { ChapterToolMessage } from "../chapter/chapter-tool-message";
 import { CharacterToolMessage } from "../character/character-tool-message";
+import { KnowledgeReadToolMessage } from "../knowledge/knowledge-read-tool-message";
+import { KnowledgeSearchToolMessage } from "../knowledge/knowledge-search-tool-message";
+import {
+  getKnowledgeReadDetail,
+  getKnowledgeSearchDetail,
+  getLegacyListDetail,
+  getLegacySingleReadDetail,
+} from "../knowledge/knowledge-tool-message.utils";
 import { EditNoteToolMessage, WriteNoteToolMessage } from "../note/note-tool-message";
 import {
   getSubagentDispatchDetail,
@@ -76,7 +85,6 @@ import {
   getChapterList,
   getChapterPayload,
   getChapterSummaryList,
-  getCharacterList,
   getCharacterPayload,
   getNoteItemList,
   getNotePayload,
@@ -88,7 +96,6 @@ import {
   getToolResultData,
   getVolumeList,
   getVolumePayload,
-  getWorldEntryList,
   getWorldEntryPayload,
   isRecord,
 } from "./tool-message-utils";
@@ -574,12 +581,7 @@ const TOOL_REGISTRY = {
     contentMode: "hidden",
     icon: ListOrdered,
     getTitle: () => i18n.t("assistant.tools.listCharacters"),
-    getDetail: (message) => {
-      const characters = getCharacterList(message);
-      return characters.length > 0
-        ? i18n.t("assistant.tools.characterCount", { count: characters.length })
-        : undefined;
-    },
+    getDetail: (message) => getLegacyListDetail(message, "character"),
   },
   read_character: {
     toolName: "read_character",
@@ -589,7 +591,7 @@ const TOOL_REGISTRY = {
     contentMode: "hidden",
     icon: BookOpen,
     getTitle: () => i18n.t("assistant.tools.readCharacter"),
-    getDetail: (message) => getCharacterPayload(message).name,
+    getDetail: (message) => getLegacySingleReadDetail(message, "character"),
   },
   list_world_entries: {
     toolName: "list_world_entries",
@@ -599,12 +601,7 @@ const TOOL_REGISTRY = {
     contentMode: "hidden",
     icon: ListOrdered,
     getTitle: () => i18n.t("assistant.tools.listWorldEntries"),
-    getDetail: (message) => {
-      const entries = getWorldEntryList(message);
-      return entries.length > 0
-        ? i18n.t("assistant.tools.worldEntryCount", { count: entries.length })
-        : undefined;
-    },
+    getDetail: (message) => getLegacyListDetail(message, "world_entry"),
   },
   read_world_entry: {
     toolName: "read_world_entry",
@@ -614,7 +611,55 @@ const TOOL_REGISTRY = {
     contentMode: "hidden",
     icon: BookOpen,
     getTitle: () => i18n.t("assistant.tools.readWorldEntry"),
-    getDetail: (message) => getWorldEntryPayload(message).title,
+    getDetail: (message) => getLegacySingleReadDetail(message, "world_entry"),
+  },
+  search_world_entries: {
+    toolName: "search_world_entries",
+    group: "context",
+    tag: "world-entry-search",
+    isExplore: true,
+    contentMode: "expandable",
+    icon: BookSearch,
+    getTitle: () => i18n.t("assistant.tools.searchWorldEntries"),
+    getDetail: (message) => getKnowledgeSearchDetail(message),
+    defaultExpanded: () => false,
+    render: (message) => <KnowledgeSearchToolMessage message={message} kind="world_entry" />,
+  },
+  search_characters: {
+    toolName: "search_characters",
+    group: "context",
+    tag: "character-search",
+    isExplore: true,
+    contentMode: "expandable",
+    icon: UserSearch,
+    getTitle: () => i18n.t("assistant.tools.searchCharacters"),
+    getDetail: (message) => getKnowledgeSearchDetail(message),
+    defaultExpanded: () => false,
+    render: (message) => <KnowledgeSearchToolMessage message={message} kind="character" />,
+  },
+  read_world_entries: {
+    toolName: "read_world_entries",
+    group: "context",
+    tag: "world-entry-read",
+    isExplore: true,
+    contentMode: "expandable",
+    icon: BookOpen,
+    getTitle: () => i18n.t("assistant.tools.readWorldEntries"),
+    getDetail: (message) => getKnowledgeReadDetail(message),
+    defaultExpanded: () => false,
+    render: (message) => <KnowledgeReadToolMessage message={message} kind="world_entry" />,
+  },
+  read_characters: {
+    toolName: "read_characters",
+    group: "context",
+    tag: "character-read",
+    isExplore: true,
+    contentMode: "expandable",
+    icon: BookOpen,
+    getTitle: () => i18n.t("assistant.tools.readCharacters"),
+    getDetail: (message) => getKnowledgeReadDetail(message),
+    defaultExpanded: () => false,
+    render: (message) => <KnowledgeReadToolMessage message={message} kind="character" />,
   },
   create_world_entry: {
     toolName: "create_world_entry",

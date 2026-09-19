@@ -5,6 +5,14 @@ from app.agent_runtime.tools.impls.context.character import (
     ListCharactersTool,
     ReadCharacterTool,
 )
+from app.agent_runtime.tools.impls.context.knowledge_read import (
+    ReadCharactersTool,
+    ReadWorldEntriesTool,
+)
+from app.agent_runtime.tools.impls.context.knowledge_search import (
+    SearchCharactersTool,
+    SearchWorldEntriesTool,
+)
 from app.agent_runtime.tools.impls.context.read_chapter_summaries import (
     ReadChapterSummariesTool,
 )
@@ -25,6 +33,8 @@ __all__ = [
     "CreateCharacterTool",
     "EditCharacterTool",
     "DeleteCharacterTool",
+    "SearchCharactersTool",
+    "ReadCharactersTool",
     "ReadChapterSummariesTool",
     "ReadRangeSummariesTool",
     "ListWorldEntriesTool",
@@ -32,4 +42,6 @@ __all__ = [
     "CreateWorldEntryTool",
     "EditWorldEntryTool",
     "DeleteWorldEntryTool",
+    "SearchWorldEntriesTool",
+    "ReadWorldEntriesTool",
 ]

@@ -47,3 +47,5 @@ export { UnitTextField } from "./unit-text-field";
 export type { UnitTextFieldProps } from "./unit-text-field";
 export { StepperNumberInput } from "./stepper-number-input";
 export type { StepperNumberInputProps } from "./stepper-number-input";
+export { AliasInput } from "./alias-input";
+export type { AliasInputProps } from "./alias-input";

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import NotFoundError
 from app.storage.models.world_info import WorldInfo
 from app.storage.repos import project_repo, world_info_entry_repo, world_info_repo
+from app.storage.services import knowledge_alias_service
 
 INTERNAL_WORLD_INFO_NAME = ""
 
@@ -68,7 +69,8 @@ async def delete_world_info(session: AsyncSession, world_info_id: str) -> None:
     """
     world_info = await get_world_info(session, world_info_id)
 
-    # 先删除所有条目
+    # 先删除条目别名与条目，再删除世界书
+    await knowledge_alias_service.delete_entry_aliases_by_world_info(session, world_info_id)
     await world_info_entry_repo.delete_by_world_info(session, world_info_id)
 
     # 再删除世界书

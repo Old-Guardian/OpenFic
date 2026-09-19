@@ -15,6 +15,7 @@ from app.storage.models.agent_memory import AgentMemory
 from app.storage.models.agent_rule import AgentRule
 from app.agent_runtime.persistence.model import AgentAttachment, AgentContextCompaction, AgentRunMessage
 from app.storage.models.character import Character
+from app.storage.models.character_alias import CharacterAlias
 from app.storage.models.chapter import Chapter
 from app.storage.models.chapter_summary import ChapterSummary
 from app.storage.models.commit import Commit
@@ -42,6 +43,7 @@ from app.storage.models.writing_activity_event import WritingActivityEvent
 from app.storage.models.note import Note, NoteCategory
 from app.storage.models.world_info import WorldInfo
 from app.storage.models.world_info_entry import WorldInfoEntry
+from app.storage.models.world_info_entry_alias import WorldInfoEntryAlias
 
 __all__ = [
     "LLMAuditLog",
@@ -54,6 +56,7 @@ __all__ = [
     "BackgroundJobEvent",
     "BackgroundJobItem",
     "Character",
+    "CharacterAlias",
     "Chapter",
     "ChapterSummary",
     "Commit",
@@ -82,4 +85,5 @@ __all__ = [
     "WritingActivityEvent",
     "WorldInfo",
     "WorldInfoEntry",
+    "WorldInfoEntryAlias",
 ]

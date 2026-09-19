@@ -2,6 +2,7 @@ export interface EntryEditorState {
   name: string;
   content: string;
   tokenCount: number;
+  aliases: string[];
 }
 
 export function resolveRemoteEntryEditorState(

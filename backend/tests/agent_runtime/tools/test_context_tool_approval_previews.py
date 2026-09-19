@@ -59,7 +59,7 @@ async def test_create_world_entry_builds_approval_diff_preview() -> None:
             AsyncMock(return_value=_make_world_info()),
         ),
         patch(
-            "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_repo.list_all_by_world_info",
+            "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_repo.list_by_name",
             AsyncMock(return_value=[]),
         ),
     ):
@@ -102,8 +102,12 @@ async def test_edit_world_entry_builds_approval_diff_preview() -> None:
             AsyncMock(return_value=_make_world_info()),
         ),
         patch(
-            "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_repo.list_all_by_world_info",
+            "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_repo.list_by_name",
             AsyncMock(return_value=[entry]),
+        ),
+        patch(
+            "app.agent_runtime.tools.impls.context.world_entry.knowledge_alias_service.list_entry_aliases",
+            AsyncMock(return_value=[]),
         ),
     ):
         preview = await tool.build_interrupt_preview(
@@ -148,7 +152,7 @@ async def test_create_character_builds_approval_diff_preview() -> None:
     object.__setattr__(tool, "_config", {"configurable": {"db_session": runtime_session}})
 
     with patch(
-        "app.agent_runtime.tools.impls.context.character.character_repo.list_all_by_project",
+        "app.agent_runtime.tools.impls.context.character.character_repo.list_by_project_and_name",
         AsyncMock(return_value=[]),
     ):
         preview = await tool.build_interrupt_preview({"name": "新角色", "description": "角色描述"})
@@ -185,8 +189,11 @@ async def test_edit_character_builds_approval_diff_preview() -> None:
     object.__setattr__(tool, "_config", {"configurable": {"db_session": runtime_session}})
 
     with patch(
-        "app.agent_runtime.tools.impls.context.character.character_repo.list_all_by_project",
+        "app.agent_runtime.tools.impls.context.character.character_repo.list_by_project_and_name",
         AsyncMock(return_value=[character]),
+    ), patch(
+        "app.agent_runtime.tools.impls.context.character.knowledge_alias_service.list_character_aliases",
+        AsyncMock(return_value=[]),
     ):
         preview = await tool.build_interrupt_preview(
             {"name": "旧角色", "old_description": "旧描述", "new_description": "新描述"}
@@ -220,3 +227,79 @@ async def test_edit_character_builds_approval_diff_preview() -> None:
             }
         ],
     }
+
+
+async def test_edit_world_entry_preview_shows_alias_changes() -> None:
+    from app.agent_runtime.tools.impls.context.world_entry import EditWorldEntryTool
+
+    runtime_session = AsyncMock()
+    entry = _make_world_entry()
+    tool = EditWorldEntryTool(_state=_make_state())
+    object.__setattr__(tool, "_config", {"configurable": {"db_session": runtime_session}})
+
+    with (
+        patch(
+            "app.agent_runtime.tools.impls.context.world_entry.world_info_repo.get_by_project_id",
+            AsyncMock(return_value=_make_world_info()),
+        ),
+        patch(
+            "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_repo.list_by_name",
+            AsyncMock(return_value=[entry]),
+        ),
+        patch(
+            "app.agent_runtime.tools.impls.context.world_entry.knowledge_alias_service.list_entry_aliases",
+            AsyncMock(return_value=["旧别名"]),
+        ),
+    ):
+        preview = await tool.build_interrupt_preview(
+            {"title": "旧条目", "aliases": ["旧别名", "新别名"]}
+        )
+
+    assert preview is not None
+    diff = preview["metadata"]["world_entry_diff"]
+    assert diff["operation"] == "edit"
+    assert diff["aliases"] == {"added": ["新别名"], "removed": []}
+    assert diff["sections"][0]["lines"] == []
+
+
+async def test_create_character_preview_shows_aliases() -> None:
+    from app.agent_runtime.tools.impls.context.character import CreateCharacterTool
+
+    runtime_session = AsyncMock()
+    tool = CreateCharacterTool(_state=_make_state())
+    object.__setattr__(tool, "_config", {"configurable": {"db_session": runtime_session}})
+
+    with patch(
+        "app.agent_runtime.tools.impls.context.character.character_repo.list_by_project_and_name",
+        AsyncMock(return_value=[]),
+    ):
+        preview = await tool.build_interrupt_preview(
+            {"name": "新角色", "description": "角色描述", "aliases": ["小角色"]}
+        )
+
+    assert preview is not None
+    diff = preview["metadata"]["character_diff"]
+    assert diff["operation"] == "create"
+    assert diff["aliases"] == {"added": ["小角色"], "removed": []}
+
+
+async def test_edit_character_preview_rejects_invalid_alias_payload() -> None:
+    from app.agent_runtime.tools.impls.context.character import EditCharacterTool
+
+    runtime_session = AsyncMock()
+    character = _make_character()
+    tool = EditCharacterTool(_state=_make_state())
+    object.__setattr__(tool, "_config", {"configurable": {"db_session": runtime_session}})
+
+    with patch(
+        "app.agent_runtime.tools.impls.context.character.character_repo.list_by_project_and_name",
+        AsyncMock(return_value=[character]),
+    ), patch(
+        "app.agent_runtime.tools.impls.context.character.knowledge_alias_service.list_character_aliases",
+        AsyncMock(return_value=[]),
+    ):
+        preview = await tool.build_interrupt_preview(
+            {"name": "旧角色", "aliases": ["  "]}
+        )
+
+    assert preview is None

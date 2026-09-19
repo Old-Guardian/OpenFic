@@ -28,7 +28,7 @@ def test_migration_graph_has_single_vertex_head() -> None:
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
 
-    assert ScriptDirectory.from_config(config).get_heads() == ["1023"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["1024"]
 
 
 def _create_legacy_schema(connection: Connection) -> None:

@@ -33,5 +33,9 @@ class RevisionWorldEntrySnapshot(SQLModel, table=True):
     )
     token_count: int | None = Field(default=None)
     is_enabled: bool | None = Field(default=None)
+    aliases_json: str | None = Field(
+        default=None,
+        description="别名列表的 JSON 数组快照；NULL 表示当时的空别名列表",
+    )
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), index=True)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

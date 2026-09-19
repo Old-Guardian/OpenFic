@@ -13,6 +13,7 @@ from app.core.storage import delete_character_image, save_character_image
 from app.core.utils.tiktoken import get_encoding
 from app.storage.models.character import Character
 from app.storage.repos import character_repo, project_repo
+from app.storage.services import knowledge_alias_service
 
 
 @dataclass
@@ -67,19 +68,33 @@ async def create_character(
     name: str,
     description: str = "",
     image_file: UploadFile | None = None,
+    aliases: list[str] | None = None,
 ) -> Character:
-    """创建角色。"""
+    """创建角色。
+
+    ``aliases`` 缺省表示无别名；提交的别名按知识检索规则归一化后与角色
+    在同一事务写入。
+    """
     validate_editor_content(description)
     project = await project_repo.get_by_id(session, project_id)
     if project is None:
         raise NotFoundError(f"项目不存在: {project_id}")
 
     resolved_name = make_available_name(name.strip(), await character_repo.list_names_by_project(session, project_id))
+    normalized_aliases = (
+        knowledge_alias_service.normalize_aliases(aliases, entity_name=resolved_name)
+        if aliases is not None
+        else []
+    )
 
     character = await character_repo.create(
         session,
         Character(project_id=project_id, name=resolved_name, description=description),
     )
+    if normalized_aliases:
+        await knowledge_alias_service.replace_character_aliases(
+            session, character.id, normalized_aliases
+        )
     if image_file is not None:
         character.image_path = await save_character_image(character.id, image_file)
         character.updated_at = datetime.now(UTC)
@@ -159,8 +174,13 @@ async def update_character(
     description: str | None = None,
     is_favorited: bool | None = None,
     image_file: UploadFile | None = None,
+    aliases: list[str] | None = None,
 ) -> Character:
-    """更新角色。"""
+    """更新角色。
+
+    ``aliases`` 为 ``None`` 表示保留既有别名，``[]`` 表示清空；只提交别名
+    也会更新 ``updated_at``。
+    """
     character = await get_character(session, character_id)
     old_image_path = character.image_path
 
@@ -174,20 +194,30 @@ async def update_character(
         character.description = description
     if is_favorited is not None:
         character.is_favorited = is_favorited
+    normalized_aliases = (
+        knowledge_alias_service.normalize_aliases(aliases, entity_name=character.name)
+        if aliases is not None
+        else None
+    )
     if image_file is not None:
         character.image_path = await save_character_image(character.id, image_file)
     character.updated_at = datetime.now(UTC)
     character = await character_repo.update(session, character)
 
+    if normalized_aliases is not None:
+        await knowledge_alias_service.replace_character_aliases(
+            session, character.id, normalized_aliases
+        )
     if image_file is not None and old_image_path:
         delete_character_image(old_image_path)
     return character
 
 
 async def delete_character(session: AsyncSession, character_id: str) -> None:
-    """删除角色。"""
+    """删除角色及其别名。"""
     character = await get_character(session, character_id)
     image_path = character.image_path
+    await knowledge_alias_service.delete_character_aliases(session, character_id)
     await character_repo.delete(session, character)
     if image_path:
         delete_character_image(image_path)
@@ -211,14 +241,31 @@ async def batch_delete_characters(
     project_id: str,
     character_ids: list[str],
 ) -> int:
-    """批量删除角色。"""
+    """批量删除角色及其别名。"""
     project = await project_repo.get_by_id(session, project_id)
     if project is None:
         raise NotFoundError(f"项目不存在: {project_id}")
 
     characters = await character_repo.list_by_project_and_ids(session, project_id, character_ids)
     deleted_count = await character_repo.batch_delete(session, project_id, character_ids)
+    await knowledge_alias_service.delete_character_aliases_by_ids(
+        session, [character.id for character in characters]
+    )
     for character in characters:
         if character.image_path:
             delete_character_image(character.image_path)
     return deleted_count
+
+
+async def list_aliases(session: AsyncSession, character_id: str) -> list[str]:
+    """获取角色别名，按用户输入顺序返回。"""
+    await get_character(session, character_id)
+    return await knowledge_alias_service.list_character_aliases(session, character_id)
+
+
+async def list_aliases_by_ids(
+    session: AsyncSession,
+    character_ids: list[str],
+) -> dict[str, list[str]]:
+    """批量获取角色别名，未命中或缺失的角色返回空列表。"""
+    return await knowledge_alias_service.list_character_aliases_by_ids(session, character_ids)

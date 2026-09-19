@@ -1,8 +1,9 @@
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.agent_runtime.revisions import (
     character_images_by_id,
@@ -12,26 +13,58 @@ from app.agent_runtime.revisions import (
 from app.agent_runtime.tools.base import AgentTool
 from app.core.editor_content_limits import EditorContentLimitError, validate_editor_content
 from app.agent_runtime.tools.errors import ToolExecutionError
+from app.agent_runtime.tools.impls._aliases import (
+    alias_changes,
+    is_alias_list,
+    normalize_preview_aliases,
+)
 from app.agent_runtime.tools.impls._locks import keyed_lock
+from app.agent_runtime.tools.impls.context.knowledge_read import build_next_read_hint
 from app.agent_runtime.tools.registry import ToolRegistry
 from app.agent_runtime.tools.text_match import fuzzy_replace
 from app.storage.database import create_session
 from app.storage.models.character import Character
 from app.storage.repos import character_repo
-from app.storage.services import character_service
+from app.storage.services import (
+    character_service,
+    knowledge_alias_service,
+    knowledge_read_service,
+    knowledge_search_service,
+)
+from app.storage.services.knowledge_contracts import (
+    LEGACY_LIST_DEFAULT_LIMIT,
+    LEGACY_LIST_MAX_LIMIT,
+    LEGACY_SINGLE_READ_MAX_CHARS,
+    KnowledgeReadItemRequest,
+    KnowledgeReadRequest,
+    ReadStatus,
+)
+from app.storage.services.knowledge_read_service import KnowledgeReadError
+from app.storage.services.knowledge_search_service import KnowledgeSearchError
 
 
 class ListCharactersInput(BaseModel):
-    pass
+    limit: int | None = Field(
+        default=None,
+        description=f"本次返回条数，1~{LEGACY_LIST_MAX_LIMIT}，默认 {LEGACY_LIST_DEFAULT_LIMIT}",
+    )
+    cursor: str | None = Field(
+        default=None,
+        description="上一页返回的 next_cursor，仅用于继续翻页；数据变化后需从第一页重新列出",
+    )
 
 
 class ReadCharacterInput(BaseModel):
-    name: str = Field(description="要读取的角色名称")
+    name: str = Field(description="要读取的角色名称（正式名称，不含别名）")
 
 
 class CreateCharacterInput(BaseModel):
     name: str = Field(description="新角色名称")
     description: str = Field(description="新角色描述")
+    aliases: list[str] | None = Field(
+        default=None,
+        description="可选别名列表，最多 20 个、每个 1~100 字符；别名不参与名称唯一性校验",
+    )
 
 
 class EditCharacterInput(BaseModel):
@@ -40,6 +73,10 @@ class EditCharacterInput(BaseModel):
     old_description: str | None = Field(default=None, description="要查找并替换的原始描述文本")
     new_description: str | None = Field(default=None, description="用于替换 old_description 的新描述文本")
     replace_all: bool = Field(default=False, description="是否替换命中的全部 old_description")
+    aliases: list[str] | None = Field(
+        default=None,
+        description="整体替换别名列表：缺省表示保留既有别名，[] 表示清空",
+    )
 
     @field_validator("old_description", mode="after")
     @classmethod
@@ -48,15 +85,16 @@ class EditCharacterInput(BaseModel):
             raise ValueError("old_description 不能为空字符串")
         return v
 
-    @field_validator("new_description", mode="after")
-    @classmethod
-    def check_edit_fields(cls, v, info):
-        data = info.data
-        has_name = data.get("new_name") is not None
-        has_description = data.get("old_description") is not None and v is not None
-        if not has_name and not has_description:
-            raise ValueError("new_name 和 old_description/new_description 必填一类")
-        return v
+    @model_validator(mode="after")
+    def check_edit_fields(self) -> "EditCharacterInput":
+        has_name = self.new_name is not None
+        has_description = (
+            self.old_description is not None and self.new_description is not None
+        )
+        has_aliases = self.aliases is not None
+        if not has_name and not has_description and not has_aliases:
+            raise ValueError("new_name、old_description/new_description 和 aliases 至少提供一类")
+        return self
 
 
 class DeleteCharacterInput(BaseModel):
@@ -68,14 +106,26 @@ class CharacterPreview:
     id: str
     name: str
     description: str
+    aliases: tuple[str, ...] = ()
 
 
-def _preview_from_character(character: Character) -> CharacterPreview:
+def _preview_from_character(
+    character: Character,
+    *,
+    aliases: Sequence[str] = (),
+) -> CharacterPreview:
     return CharacterPreview(
         id=character.id,
         name=character.name,
         description=character.description,
+        aliases=tuple(aliases),
     )
+
+
+async def _character_preview(session, character: Character) -> CharacterPreview:
+    """构建带别名的角色预览；别名单独查询，避免改动既有取图接口。"""
+    aliases = await knowledge_alias_service.list_character_aliases(session, character.id)
+    return _preview_from_character(character, aliases=aliases)
 
 
 def _format_content_with_line_numbers(content: str) -> str:
@@ -128,11 +178,18 @@ def _build_character_diff(
     else:
         operation = "edit"
         lines = _diff_lines(before.description, after.description) if before.description != after.description else []
-    return {
+    diff = {
         "operation": operation,
         "character_name": target.name,
         "sections": [{"type": "content", "lines": lines}],
     } | ({"character_id": target.id} if target.id else {})
+    alias_diff = alias_changes(
+        before.aliases if before is not None else (),
+        after.aliases if after is not None else (),
+    )
+    if alias_diff is not None:
+        diff["aliases"] = alias_diff
+    return diff
 
 
 async def _list_project_characters(session, project_id: str) -> list[Character]:
@@ -143,12 +200,15 @@ async def _resolve_character_by_name(session, project_id: str, name: str) -> Cha
     normalized_name = name.strip()
     if not normalized_name:
         raise ToolExecutionError("角色名称不能为空")
-    characters = await _list_project_characters(session, project_id)
-    matches = [character for character in characters if character.name == normalized_name]
+    matches = await character_repo.list_by_project_and_name(
+        session, project_id, normalized_name
+    )
     if not matches:
         raise ToolExecutionError(f"角色不存在: {normalized_name}")
     if len(matches) > 1:
-        raise ToolExecutionError(f"角色名称不唯一: {normalized_name}")
+        raise ToolExecutionError(
+            f"角色名称不唯一: {normalized_name}，请用 search_characters 取得 id 后按 id 读取"
+        )
     return matches[0]
 
 
@@ -161,11 +221,10 @@ async def _ensure_name_available(
     normalized_name = name.strip()
     if not normalized_name:
         raise ToolExecutionError("角色名称不能为空")
-    characters = await _list_project_characters(session, project_id)
-    if any(
-        character.name == normalized_name and character.id != exclude_character_id
-        for character in characters
-    ):
+    existing = await character_repo.list_by_project_and_name(
+        session, project_id, normalized_name
+    )
+    if any(character.id != exclude_character_id for character in existing):
         raise ToolExecutionError(f"角色名称已存在: {normalized_name}")
     return normalized_name
 
@@ -180,20 +239,38 @@ def _require_revision_id(state: dict) -> str:
 @ToolRegistry.register
 class ListCharactersTool(AgentTool):
     name: str = "list_characters"
-    description: str = "获取当前项目中的角色名称列表。"
+    description: str = f"""分页列出当前项目的角色名称与稳定 id。
+
+默认每页 {LEGACY_LIST_DEFAULT_LIMIT} 条、最多 {LEGACY_LIST_MAX_LIMIT} 条；has_more=true 时用返回的
+next_cursor 继续翻页，翻到 has_more=false 才算枚举完毕。按关键词查找角色
+请优先用 search_characters。"""
     access_level: str = "readonly"
     args_schema: type[BaseModel] = ListCharactersInput
 
-    async def _execute(self) -> str:
+    async def _execute(self, limit: int | None = None, cursor: str | None = None) -> str:
+        resolved_limit = LEGACY_LIST_DEFAULT_LIMIT if limit is None else limit
+        if not 1 <= resolved_limit <= LEGACY_LIST_MAX_LIMIT:
+            raise ToolExecutionError(
+                f"limit 必须在 1~{LEGACY_LIST_MAX_LIMIT} 之间，收到 {resolved_limit}"
+            )
         session = await create_session()
         try:
-            characters = await _list_project_characters(session, self.project_id)
+            try:
+                page = await knowledge_search_service.list_characters(
+                    session, self.project_id, limit=resolved_limit, cursor=cursor
+                )
+            except KnowledgeSearchError as exc:
+                raise ToolExecutionError(exc.message) from exc
             return json.dumps(
                 {
                     "characters": [
-                        {"name": character.name}
-                        for character in characters
-                    ]
+                        {"name": character.name, "id": character.id}
+                        for character in page.items
+                    ],
+                    "returned_count": len(page.items),
+                    "total_count": page.total,
+                    "has_more": page.has_more,
+                    "next_cursor": page.next_cursor,
                 },
                 ensure_ascii=False,
             )
@@ -204,7 +281,11 @@ class ListCharactersTool(AgentTool):
 @ToolRegistry.register
 class ReadCharacterTool(AgentTool):
     name: str = "read_character"
-    description: str = "根据名称读取当前项目中的单个角色描述。"
+    description: str = f"""按正式名称读取当前项目中单个启用角色的描述（含行号）。
+
+只按正式名称定位，不匹配别名；别名定位请先用 search_characters 再按 id 读取。
+单次最多返回 {LEGACY_SINGLE_READ_MAX_CHARS} 字符：truncated=true 时描述尚未读完，
+必须按返回的 next_read 继续读取，否则会漏掉内容。"""
     access_level: str = "readonly"
     args_schema: type[BaseModel] = ReadCharacterInput
 
@@ -212,13 +293,39 @@ class ReadCharacterTool(AgentTool):
         session = await create_session()
         try:
             character = await _resolve_character_by_name(session, self.project_id, name)
-            return json.dumps(
-                {
-                    "name": character.name,
-                    "description": _format_content_with_line_numbers(character.description),
-                },
-                ensure_ascii=False,
-            )
+            try:
+                response = await knowledge_read_service.read_characters(
+                    session,
+                    self.project_id,
+                    KnowledgeReadRequest(
+                        items=[KnowledgeReadItemRequest(id=character.id)],
+                        max_chars_per_item=LEGACY_SINGLE_READ_MAX_CHARS,
+                    ),
+                )
+            except KnowledgeReadError as exc:
+                raise ToolExecutionError(exc.message) from exc
+            item = response.items[0]
+            if item.status is not ReadStatus.OK:
+                raise ToolExecutionError(
+                    f"读取角色失败: {character.name}（{item.status.value}）"
+                )
+            payload: dict[str, Any] = {
+                "name": character.name,
+                "id": character.id,
+                "description": _format_content_with_line_numbers(item.content or ""),
+                "total_chars": item.total_chars,
+                "content_version": item.content_version,
+                "truncated": item.truncated,
+                "next_start_offset": item.next_start_offset,
+            }
+            if item.truncated:
+                payload["next_read"] = build_next_read_hint(
+                    tool_name="read_characters",
+                    item_id=character.id,
+                    next_start_offset=item.next_start_offset,
+                    content_version=item.content_version,
+                )
+            return json.dumps(payload, ensure_ascii=False)
         finally:
             await session.close()
 
@@ -234,7 +341,10 @@ class CreateCharacterTool(AgentTool):
         session = self.get_runtime_db_session()
         name = args.get("name")
         description = args.get("description")
+        aliases = args.get("aliases")
         if session is None or not isinstance(name, str) or not isinstance(description, str):
+            return None
+        if aliases is not None and not is_alias_list(aliases):
             return None
         try:
             validate_editor_content(description)
@@ -244,7 +354,15 @@ class CreateCharacterTool(AgentTool):
             normalized_name = await _ensure_name_available(session, self.project_id, name)
         except ToolExecutionError:
             return None
-        after = CharacterPreview(id="", name=normalized_name, description=description)
+        preview_aliases = normalize_preview_aliases(aliases, entity_name=normalized_name)
+        if preview_aliases is None:
+            return None
+        after = CharacterPreview(
+            id="",
+            name=normalized_name,
+            description=description,
+            aliases=tuple(preview_aliases),
+        )
         return {
             "type": "preview",
             "success": True,
@@ -253,7 +371,12 @@ class CreateCharacterTool(AgentTool):
             "metadata": {"character_diff": _build_character_diff(None, after)},
         }
 
-    async def _execute(self, name: str, description: str) -> str:
+    async def _execute(
+        self,
+        name: str,
+        description: str,
+        aliases: list[str] | None = None,
+    ) -> str:
         revision_id = _require_revision_id(self._state)
         try:
             validate_editor_content(description)
@@ -263,21 +386,25 @@ class CreateCharacterTool(AgentTool):
         try:
             async with await keyed_lock(("characters", self.project_id)):
                 normalized_name = await _ensure_name_available(session, self.project_id, name)
-                character = await character_service.create_character(
-                    session,
-                    self.project_id,
-                    name=normalized_name,
-                    description=description,
-                )
+                try:
+                    character = await character_service.create_character(
+                        session,
+                        self.project_id,
+                        name=normalized_name,
+                        description=description,
+                        aliases=aliases,
+                    )
+                except ValueError as exc:
+                    raise ToolExecutionError(f"别名不合法: {exc}") from exc
                 await record_character_diffs(
                     session,
                     revision_id=revision_id,
                     project_id=self.project_id,
                     before={},
-                    after=character_images_by_id([character]),
+                    after=await character_images_by_id(session, [character]),
                 )
                 await session.commit()
-                character_preview = _preview_from_character(character)
+                character_preview = await _character_preview(session, character)
                 return json.dumps(
                     {
                         "success": True,
@@ -309,17 +436,19 @@ class EditCharacterTool(AgentTool):
         new_name = args.get("new_name")
         old_description = args.get("old_description")
         new_description = args.get("new_description")
+        aliases = args.get("aliases")
         if (
             session is None
             or not isinstance(name, str)
             or (new_name is not None and not isinstance(new_name, str))
             or (old_description is not None and not isinstance(old_description, str))
             or (new_description is not None and not isinstance(new_description, str))
+            or (aliases is not None and not is_alias_list(aliases))
         ):
             return None
         try:
             character = await _resolve_character_by_name(session, self.project_id, name)
-            before = _preview_from_character(character)
+            before = await _character_preview(session, character)
             description = before.description
             if old_description is not None and new_description is not None:
                 replace_result = fuzzy_replace(
@@ -340,12 +469,20 @@ class EditCharacterTool(AgentTool):
                 if new_name is not None
                 else before.name
             )
+            updated_aliases = (
+                normalize_preview_aliases(aliases, entity_name=updated_name)
+                if aliases is not None
+                else list(before.aliases)
+            )
         except (EditorContentLimitError, ToolExecutionError):
+            return None
+        if updated_aliases is None:
             return None
         after = CharacterPreview(
             id=before.id,
             name=updated_name,
             description=description,
+            aliases=tuple(updated_aliases),
         )
         return {
             "type": "preview",
@@ -362,13 +499,14 @@ class EditCharacterTool(AgentTool):
         old_description: str | None = None,
         new_description: str | None = None,
         replace_all: bool = False,
+        aliases: list[str] | None = None,
     ) -> str:
         revision_id = _require_revision_id(self._state)
         session = await create_session()
         try:
             async with await keyed_lock(("characters", self.project_id)):
                 character = await _resolve_character_by_name(session, self.project_id, name)
-                before = _preview_from_character(character)
+                before = await _character_preview(session, character)
                 description = character.description
                 if old_description is not None and new_description is not None:
                     replace_result = fuzzy_replace(
@@ -390,22 +528,26 @@ class EditCharacterTool(AgentTool):
                         new_name,
                         exclude_character_id=character.id,
                     )
-                before_images = character_images_by_id([character])
-                updated = await character_service.update_character(
-                    session,
-                    character.id,
-                    name=normalized_new_name,
-                    description=description if description != before.description else None,
-                )
+                before_images = await character_images_by_id(session, [character])
+                try:
+                    updated = await character_service.update_character(
+                        session,
+                        character.id,
+                        name=normalized_new_name,
+                        description=description if description != before.description else None,
+                        aliases=aliases,
+                    )
+                except ValueError as exc:
+                    raise ToolExecutionError(f"别名不合法: {exc}") from exc
                 await record_character_diffs(
                     session,
                     revision_id=revision_id,
                     project_id=self.project_id,
                     before=before_images,
-                    after=character_images_by_id([updated]),
+                    after=await character_images_by_id(session, [updated]),
                 )
                 await session.commit()
-                after = _preview_from_character(updated)
+                after = await _character_preview(session, updated)
                 return json.dumps(
                     {
                         "success": True,
@@ -437,8 +579,8 @@ class DeleteCharacterTool(AgentTool):
         try:
             async with await keyed_lock(("characters", self.project_id)):
                 character = await _resolve_character_by_name(session, self.project_id, name)
-                before = _preview_from_character(character)
-                before_images = character_images_by_id([character])
+                before = await _character_preview(session, character)
+                before_images = await character_images_by_id(session, [character])
                 await character_service.delete_character(session, character.id)
                 await record_character_diffs(
                     session,

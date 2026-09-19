@@ -88,6 +88,53 @@ async def list_all_by_project(session: AsyncSession, project_id: str) -> list[Ch
     return list(result.scalars().all())
 
 
+async def count_by_project(session: AsyncSession, project_id: str) -> int:
+    """统计项目内角色总数。"""
+    result = await session.execute(
+        select(func.count(col(Character.id))).where(col(Character.project_id) == project_id)
+    )
+    return result.scalar_one()
+
+
+async def list_page_by_project(
+    session: AsyncSession,
+    project_id: str,
+    *,
+    limit: int,
+    offset: int,
+) -> list[Character]:
+    """按收藏、更新时间稳定分页获取角色；ID 仅作平手时的确定性兜底。"""
+    result = await session.execute(
+        select(Character)
+        .where(col(Character.project_id) == project_id)
+        .order_by(
+            col(Character.is_favorited).desc(),
+            col(Character.updated_at).desc(),
+            col(Character.id).asc(),
+        )
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(result.scalars().all())
+
+
+async def list_by_project_and_name(
+    session: AsyncSession,
+    project_id: str,
+    name: str,
+) -> list[Character]:
+    """按正式名称精确查询角色。"""
+    result = await session.execute(
+        select(Character)
+        .where(
+            col(Character.project_id) == project_id,
+            col(Character.name) == name,
+        )
+        .order_by(col(Character.id).asc())
+    )
+    return list(result.scalars().all())
+
+
 async def update(session: AsyncSession, character: Character) -> Character:
     """更新角色。"""
     session.add(character)
@@ -168,3 +215,12 @@ async def delete(session: AsyncSession, character: Character) -> None:
     """删除角色。"""
     await session.delete(character)
     await session.flush()
+
+
+async def delete_by_project(session: AsyncSession, project_id: str) -> int:
+    """删除项目下的所有角色。"""
+    result = await session.execute(
+        sql_delete(Character).where(col(Character.project_id) == project_id)
+    )
+    await session.flush()
+    return cast("CursorResult[Any]", result).rowcount

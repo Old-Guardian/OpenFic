@@ -4,7 +4,8 @@
 """
 
 from pathlib import Path
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 
 from alembic import command
 from alembic.config import Config
@@ -37,6 +38,30 @@ def _set_sqlite_pragma(dbapi_connection, connection_record):
 event.listen(Engine, "connect", _set_sqlite_pragma)
 
 
+def _disable_implicit_sqlite_transactions(dbapi_connection, connection_record):
+    """关闭 pysqlite 的隐式事务管理。
+
+    pysqlite 默认只在 DML 前隐式发送 BEGIN，纯 SELECT 不进入真实读事务，
+    因而拿不到 WAL 一致读快照。交由 :func:`_begin_sqlite_transaction` 显式开启。
+    """
+    dbapi_connection.isolation_level = None
+
+
+def _begin_sqlite_transaction(conn):
+    """事务开始时显式发送 BEGIN，使只读查询也持有 WAL 一致读快照。"""
+    conn.exec_driver_sql("BEGIN")
+
+
+def enable_sqlite_transactions(engine) -> None:
+    """为指定 SQLite 引擎启用显式 BEGIN，使只读查询获得一致读快照。
+
+    需与 ``isolation_level = None`` 成对使用：关闭驱动的隐式事务后必须由
+    SQLAlchemy 显式发送 BEGIN，否则写操作会退化为自动提交。
+    """
+    event.listen(engine.sync_engine, "connect", _disable_implicit_sqlite_transactions)
+    event.listen(engine.sync_engine, "begin", _begin_sqlite_transaction)
+
+
 def _get_engine():
     """获取或创建数据库引擎。"""
     global _engine
@@ -50,6 +75,7 @@ def _get_engine():
             },
             pool_pre_ping=True,
         )
+        enable_sqlite_transactions(_engine)
     return _engine
 
 
@@ -126,6 +152,20 @@ async def create_session() -> AsyncSession:
     """创建独立的数据库 session。"""
     session_factory = _get_session_factory()
     return session_factory()
+
+
+@asynccontextmanager
+async def read_snapshot(session: AsyncSession) -> AsyncIterator[None]:
+    """让一段只读查询共享同一数据库读快照。
+
+    未处于事务中时开启只读事务并在退出时提交，及时释放快照；已处于事务中
+    则直接复用，由调用方决定提交时机。
+    """
+    if session.in_transaction():
+        yield
+        return
+    async with session.begin():
+        yield
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

@@ -47,7 +47,10 @@ function normalizeParsedToolResult(
   const explicitSuccess = typeof options.success === "boolean" ? options.success : undefined;
 
   if (isRecord(parsed)) {
-    const errorText = getString(parsed.error);
+    const errorRecord = isRecord(parsed.error) ? parsed.error : null;
+    const errorText =
+      getString(parsed.error) ??
+      (errorRecord ? getString(errorRecord.message) ?? getString(errorRecord.code) : undefined);
     const messageText = getString(parsed.message) || errorText;
     const success =
       explicitSuccess ??
@@ -56,7 +59,10 @@ function normalizeParsedToolResult(
       ...parsed,
       type: parsed.type ?? (success ? "ok" : "fail"),
       success,
-      reason: parsed.reason ?? (!success ? "tool_error" : undefined),
+      reason:
+        parsed.reason ??
+        (errorRecord ? getString(errorRecord.code) : undefined) ??
+        (!success ? "tool_error" : undefined),
       message: messageText,
       data: parsed.data ?? (!success ? null : parsed),
       tool_call_id: parsed.tool_call_id ?? toolCallId,

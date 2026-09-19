@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Character Router - 角色 CRUD API。"""
 
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -28,7 +29,7 @@ from app.storage.services import character_service
 router = APIRouter(tags=["characters"])
 
 
-def to_response(character: Character) -> CharacterResponse:
+def to_response(character: Character, aliases: list[str]) -> CharacterResponse:
     """转换角色响应。"""
     return CharacterResponse(
         id=character.id,
@@ -37,12 +38,13 @@ def to_response(character: Character) -> CharacterResponse:
         description=character.description,
         image_url=get_character_image_url(character.image_path),
         is_favorited=character.is_favorited,
+        aliases=aliases,
         created_at=character.created_at,
         updated_at=character.updated_at,
     )
 
 
-def to_list_item_response(character: Character) -> CharacterListItemResponse:
+def to_list_item_response(character: Character, aliases: list[str]) -> CharacterListItemResponse:
     """转换角色列表项响应。"""
     return CharacterListItemResponse(
         id=character.id,
@@ -51,9 +53,26 @@ def to_list_item_response(character: Character) -> CharacterListItemResponse:
         image_url=get_character_image_url(character.image_path),
         token_count=character_service.calculate_token_count(character.description),
         is_favorited=character.is_favorited,
+        aliases=aliases,
         created_at=character.created_at,
         updated_at=character.updated_at,
     )
+
+
+def parse_aliases_json(raw: str | None) -> list[str] | None:
+    """解析 multipart 表单里的 ``aliases_json`` 字段。
+
+    ``None`` 表示调用方未提供该字段（更新时保留既有别名）。
+    """
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("aliases_json 不是合法的 JSON") from exc
+    if not isinstance(parsed, list) or any(not isinstance(item, str) for item in parsed):
+        raise ValueError("aliases_json 必须是字符串数组")
+    return parsed
 
 
 @router.get(
@@ -68,8 +87,14 @@ async def list_project_characters(
     """获取项目角色列表。"""
     try:
         characters = await character_service.list_characters_by_project(session, project_id)
+        aliases_by_id = await character_service.list_aliases_by_ids(
+            session, [character.id for character in characters]
+        )
         return CharacterListResponse(
-            items=[to_list_item_response(character) for character in characters],
+            items=[
+                to_list_item_response(character, aliases_by_id.get(character.id, []))
+                for character in characters
+            ],
             total=len(characters),
         )
     except NotFoundError as e:
@@ -88,14 +113,23 @@ async def create_character(
     name: Annotated[str, Form(min_length=1, max_length=200)],
     description: Annotated[str, Form()] = "",
     image: Annotated[UploadFile | None, File()] = None,
+    aliases_json: Annotated[str | None, Form()] = None,
 ) -> CharacterResponse:
     """创建角色。"""
     try:
         logger.info(f"创建角色: project_id={project_id}, name={name}")
+        aliases = parse_aliases_json(aliases_json)
         character = await character_service.create_character(
-            session, project_id, name=name, description=description, image_file=image
+            session,
+            project_id,
+            name=name,
+            description=description,
+            image_file=image,
+            aliases=aliases,
         )
-        return to_response(character)
+        return to_response(
+            character, await character_service.list_aliases(session, character.id)
+        )
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ConflictError as e:
@@ -193,7 +227,9 @@ async def get_character(
     """获取角色。"""
     try:
         character = await character_service.get_character(session, character_id)
-        return to_response(character)
+        return to_response(
+            character, await character_service.list_aliases(session, character.id)
+        )
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
@@ -210,9 +246,11 @@ async def update_character(
     description: Annotated[str | None, Form()] = None,
     is_favorited: Annotated[bool | None, Form()] = None,
     image: Annotated[UploadFile | None, File()] = None,
+    aliases_json: Annotated[str | None, Form()] = None,
 ) -> CharacterResponse:
     """更新角色。"""
     try:
+        aliases = parse_aliases_json(aliases_json)
         character = await character_service.update_character(
             session,
             character_id,
@@ -220,8 +258,11 @@ async def update_character(
             description=description,
             is_favorited=is_favorited,
             image_file=image,
+            aliases=aliases,
         )
-        return to_response(character)
+        return to_response(
+            character, await character_service.list_aliases(session, character.id)
+        )
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ConflictError as e:

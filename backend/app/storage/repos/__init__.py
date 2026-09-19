@@ -7,6 +7,7 @@ from app.storage.repos import (
     agent_definition_repo,
     agent_memory_repo,
     agent_rule_repo,
+    character_alias_repo,
     character_repo,
     chapter_summary_repo,
     commit_repo,
@@ -25,12 +26,15 @@ from app.storage.repos import (
     task_repo,
     task_message_repo,
     writing_activity_repo,
+    world_info_entry_alias_repo,
+    knowledge_search_repo,
 )
 
 __all__ = [
     "agent_definition_repo",
     "agent_memory_repo",
     "agent_rule_repo",
+    "character_alias_repo",
     "character_repo",
     "chapter_summary_repo",
     "commit_repo",
@@ -49,4 +53,6 @@ __all__ = [
     "task_message_repo",
     "task_repo",
     "writing_activity_repo",
+    "world_info_entry_alias_repo",
+    "knowledge_search_repo",
 ]

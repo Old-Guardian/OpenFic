@@ -30,6 +30,7 @@ export interface WorldInfoEntry {
   content: string;
   tokenCount: number;
   isEnabled: boolean;
+  aliases: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -43,6 +44,7 @@ export interface WorldInfoEntryBrief {
   order: number;
   tokenCount: number;
   isEnabled: boolean;
+  aliases: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -53,6 +55,7 @@ export interface WorldInfoEntryCreate {
   content?: string;
   tokenCount?: number;
   isEnabled?: boolean;
+  aliases?: string[];
 }
 
 /** 更新条目请求 */
@@ -61,6 +64,7 @@ export interface WorldInfoEntryUpdate {
   content?: string;
   tokenCount?: number;
   isEnabled?: boolean;
+  aliases?: string[];
 }
 
 /** 条目轻量列表响应 */

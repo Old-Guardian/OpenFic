@@ -40,6 +40,7 @@ class WorldInfoEntryCreate(BaseModel):
     content: str = Field(default="", description="条目内容")
     token_count: int = Field(default=0, ge=0, description="Token 数量")
     is_enabled: bool = Field(default=True, description="开关状态")
+    aliases: list[str] = Field(default_factory=list, description="别名列表")
 
 
 class WorldInfoEntryUpdate(BaseModel):
@@ -49,6 +50,7 @@ class WorldInfoEntryUpdate(BaseModel):
     content: str | None = None
     token_count: int | None = Field(default=None, ge=0)
     is_enabled: bool | None = None
+    aliases: list[str] | None = Field(default=None, description="别名列表；缺省表示保留，[] 表示清空")
 
 
 class WorldInfoEntryMoveRequest(BaseModel):
@@ -93,6 +95,7 @@ class WorldInfoEntryResponse(BaseModel):
     content: str = Field(description="条目内容")
     token_count: int = Field(description="Token 数量")
     is_enabled: bool = Field(description="开关状态")
+    aliases: list[str] = Field(default_factory=list, description="别名列表")
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="更新时间")
 
@@ -109,6 +112,7 @@ class WorldInfoEntryBriefResponse(BaseModel):
     order: int = Field(description="排序序号")
     token_count: int = Field(description="Token 数量")
     is_enabled: bool = Field(description="开关状态")
+    aliases: list[str] = Field(default_factory=list, description="别名列表")
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="更新时间")
 

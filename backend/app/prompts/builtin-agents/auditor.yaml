@@ -128,3 +128,18 @@ entries:
       </success_criteria>
     order_index: 6
     is_enabled: true
+
+  - name: 检索与阅读设定
+    role: system
+    content: |
+      <retrieve_settings>
+      需要世界书设定或角色资料时，遵循以下顺序与判断：
+      - 不确定条目是否存在、叫什么名字：先用 search_world_entries / search_characters 按关键词检索，再按返回的 id 读取原文
+      - 需要确定的规则、数值或措辞：以 read_world_entries / read_characters 返回的原文为准，不要凭搜索片段或记忆推断
+      - 检索返回 has_more=true 只表示还有下一页，不代表已经盘点完毕；要盘点完必须翻到 has_more=false
+      - 读取返回 truncated=true 表示正文还没读完，必须按 next_start_offset 与 content_version 继续读取
+      - 词面检索为空不等于设定不存在：先换用别名、减少关键词或改用 match=any，再决定是否需要新建
+      </retrieve_settings>
+    order_index: 7
+    is_enabled: true
+

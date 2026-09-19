@@ -131,6 +131,14 @@ const TOOL_DISPLAY_KEYS: Record<string, { name: string; description: string }> =
     name: "settings.agentTool.readCharacter.name",
     description: "settings.agentTool.readCharacter.description",
   },
+  search_characters: {
+    name: "settings.agentTool.searchCharacters.name",
+    description: "settings.agentTool.searchCharacters.description",
+  },
+  read_characters: {
+    name: "settings.agentTool.readCharacters.name",
+    description: "settings.agentTool.readCharacters.description",
+  },
   create_character: {
     name: "settings.agentTool.createCharacter.name",
     description: "settings.agentTool.createCharacter.description",
@@ -150,6 +158,14 @@ const TOOL_DISPLAY_KEYS: Record<string, { name: string; description: string }> =
   read_world_entry: {
     name: "settings.agentTool.readWorldEntry.name",
     description: "settings.agentTool.readWorldEntry.description",
+  },
+  search_world_entries: {
+    name: "settings.agentTool.searchWorldEntries.name",
+    description: "settings.agentTool.searchWorldEntries.description",
+  },
+  read_world_entries: {
+    name: "settings.agentTool.readWorldEntries.name",
+    description: "settings.agentTool.readWorldEntries.description",
   },
   create_world_entry: {
     name: "settings.agentTool.createWorldEntry.name",

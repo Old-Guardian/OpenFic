@@ -9,8 +9,8 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
 import { getPreference, setPreference } from "../lib/local-db";
-import en from "./locales/en.json";
-import zhCN from "./locales/zh-CN.json";
+import en from "./locales/en.json" with { type: "json" };
+import zhCN from "./locales/zh-CN.json" with { type: "json" };
 
 /** 支持的语言列表 */
 export const supportedLanguages = [
@@ -31,10 +31,12 @@ const LANGUAGE_STORAGE_KEY = "openfic-language";
  * 优先使用 localStorage 存储的语言，否则使用默认语言
  */
 function getInitialLanguage(): LanguageCode {
-  // i18n 初始化需要同步获取，因此使用 localStorage
-  const storedLanguage = localStorage.getItem(LANGUAGE_STORAGE_KEY);
-  if (storedLanguage && supportedLanguages.some((lang) => lang.code === storedLanguage)) {
-    return storedLanguage as LanguageCode;
+  // i18n 初始化需要同步获取，因此使用 localStorage（若在支持的环境中）
+  if (typeof localStorage !== "undefined") {
+    const storedLanguage = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    if (storedLanguage && supportedLanguages.some((lang) => lang.code === storedLanguage)) {
+      return storedLanguage as LanguageCode;
+    }
   }
   return defaultLanguage;
 }
@@ -44,7 +46,9 @@ function getInitialLanguage(): LanguageCode {
  */
 export function saveLanguagePreference(language: LanguageCode): void {
   // 同步写入 localStorage（备份，用于下次同步读取）
-  localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+  }
   // 异步写入 Dexie
   setPreference(LANGUAGE_STORAGE_KEY, language);
 }
@@ -59,7 +63,9 @@ export async function loadLanguagePreference(): Promise<void> {
       await i18n.changeLanguage(saved);
     }
     // 同步到 localStorage
-    localStorage.setItem(LANGUAGE_STORAGE_KEY, saved);
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(LANGUAGE_STORAGE_KEY, saved);
+    }
   }
 }
 

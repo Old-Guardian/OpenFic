@@ -302,6 +302,7 @@ function transformCharacter(raw: Record<string, unknown>): Character {
     description: (raw.description as string) || "",
     imageUrl: resolveBackendUrl(raw.image_url as string | null | undefined),
     isFavorited: raw.is_favorited as boolean,
+    aliases: (raw.aliases as string[]) ?? [],
     createdAt: raw.created_at as string,
     updatedAt: raw.updated_at as string,
   };
@@ -315,6 +316,7 @@ function transformCharacterListItem(raw: Record<string, unknown>): CharacterList
     imageUrl: resolveBackendUrl(raw.image_url as string | null | undefined),
     tokenCount: raw.token_count as number,
     isFavorited: raw.is_favorited as boolean,
+    aliases: (raw.aliases as string[]) ?? [],
     createdAt: raw.created_at as string,
     updatedAt: raw.updated_at as string,
   };
@@ -342,6 +344,9 @@ export async function createCharacter(
   formData.append("name", data.name);
   formData.append("description", data.description ?? "");
   if (data.image) formData.append("image", data.image);
+  if (data.aliases !== undefined) {
+    formData.append("aliases_json", JSON.stringify(data.aliases));
+  }
 
   const response = await apiClient.post(`/projects/${projectId}/characters`, formData, {
     headers: { "Content-Type": "multipart/form-data" },
@@ -362,6 +367,9 @@ export async function updateCharacter(
     formData.append("is_favorited", String(data.isFavorited));
   }
   if (data.image) formData.append("image", data.image);
+  if (data.aliases !== undefined) {
+    formData.append("aliases_json", JSON.stringify(data.aliases));
+  }
 
   const response = await apiClient.patch(`/characters/${characterId}`, formData, {
     headers: { "Content-Type": "multipart/form-data" },
@@ -1466,6 +1474,7 @@ function transformWorldInfoEntry(raw: Record<string, unknown>): WorldInfoEntry {
     content: raw.content as string,
     tokenCount: raw.token_count as number,
     isEnabled: raw.is_enabled as boolean,
+    aliases: (raw.aliases as string[]) ?? [],
     createdAt: raw.created_at as string,
     updatedAt: raw.updated_at as string,
   };
@@ -1480,6 +1489,7 @@ function transformWorldInfoEntryBrief(raw: Record<string, unknown>): WorldInfoEn
     order: raw.order as number,
     tokenCount: raw.token_count as number,
     isEnabled: raw.is_enabled as boolean,
+    aliases: (raw.aliases as string[]) ?? [],
     createdAt: raw.created_at as string,
     updatedAt: raw.updated_at as string,
   };
@@ -1552,12 +1562,14 @@ export async function createWorldInfoEntry(
   worldInfoId: string,
   data: WorldInfoEntryCreate,
 ): Promise<WorldInfoEntry> {
-  const response = await apiClient.post(`/world-info/${worldInfoId}/entries`, {
+  const payload: Record<string, unknown> = {
     name: data.name,
     content: data.content ?? "",
     token_count: data.tokenCount ?? 0,
     is_enabled: data.isEnabled ?? true,
-  });
+    aliases: data.aliases ?? [],
+  };
+  const response = await apiClient.post(`/world-info/${worldInfoId}/entries`, payload);
   return transformWorldInfoEntry(response.data);
 }
 
@@ -1568,12 +1580,16 @@ export async function updateWorldInfoEntry(
   entryId: string,
   data: WorldInfoEntryUpdate,
 ): Promise<WorldInfoEntry> {
-  const response = await apiClient.patch(`/world-info-entries/${entryId}`, {
+  const payload: Record<string, unknown> = {
     name: data.name,
     content: data.content,
     token_count: data.tokenCount,
     is_enabled: data.isEnabled,
-  });
+  };
+  if (data.aliases !== undefined) {
+    payload.aliases = data.aliases;
+  }
+  const response = await apiClient.patch(`/world-info-entries/${entryId}`, payload);
   return transformWorldInfoEntry(response.data);
 }
 

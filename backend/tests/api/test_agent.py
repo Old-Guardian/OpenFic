@@ -375,7 +375,15 @@ class TestAgentAPI:
                 "is_readonly": True,
             },
             {
+                "key": "search_characters",
+                "is_readonly": True,
+            },
+            {
                 "key": "read_character",
+                "is_readonly": True,
+            },
+            {
+                "key": "read_characters",
                 "is_readonly": True,
             },
             {
@@ -395,7 +403,15 @@ class TestAgentAPI:
                 "is_readonly": True,
             },
             {
+                "key": "search_world_entries",
+                "is_readonly": True,
+            },
+            {
                 "key": "read_world_entry",
+                "is_readonly": True,
+            },
+            {
+                "key": "read_world_entries",
                 "is_readonly": True,
             },
             {

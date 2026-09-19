@@ -48,6 +48,7 @@ function toCharacterListItem(character: Character): CharacterListItem {
     imageUrl: character.imageUrl,
     tokenCount: countTokens(character.description),
     isFavorited: character.isFavorited,
+    aliases: character.aliases ?? [],
     createdAt: character.createdAt,
     updatedAt: character.updatedAt,
   };
@@ -273,7 +274,11 @@ export function CharactersPage() {
     },
     onError: (error) => {
       const status = (error as { response?: { status?: number } }).response?.status;
-      toast.error(status === 409 ? t("characters.nameExists") : t("characters.updateFailed"));
+      const detail = (error as { response?: { data?: { detail?: string } } }).response?.data
+        ?.detail;
+      toast.error(
+        detail || (status === 409 ? t("characters.nameExists") : t("characters.updateFailed")),
+      );
     },
   });
 
