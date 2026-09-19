@@ -15,6 +15,7 @@ import { TitleInput } from "./title-input";
 export interface MarkdownEditorProps {
   title: string;
   onTitleChange: (title: string) => void;
+  belowTitle?: React.ReactNode;
   content: string;
   onContentChange: (markdown: string) => void;
   onSave: () => void;
@@ -69,6 +70,7 @@ function EditorLinkTooltip({ link }: { link: HoveredEditorLink | null }) {
 export function MarkdownEditor({
   title,
   onTitleChange,
+  belowTitle,
   content,
   onContentChange,
   onSave,
@@ -339,6 +341,7 @@ export function MarkdownEditor({
             onDisabledClick={onLockedAction}
             placeholder={titlePlaceholder}
           />
+          {belowTitle}
           <Box style={{ borderBottom: "1px solid var(--gray-a4)" }} />
           <Box
             py="5"

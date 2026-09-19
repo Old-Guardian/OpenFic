@@ -1,4 +1,4 @@
-﻿/**
+/**
  * World Info Page
  *
  * 世界书主页面，按项目展示对应世界书条目与编辑器。
@@ -231,6 +231,7 @@ export function WorldInfoPage() {
       order: entry.order,
       tokenCount: entry.tokenCount,
       isEnabled: entry.isEnabled,
+      aliases: entry.aliases ?? [],
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
     }),

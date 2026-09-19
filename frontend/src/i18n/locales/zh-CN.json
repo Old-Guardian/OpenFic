@@ -56,6 +56,19 @@
     "swUpdated": "应用已更新，点击刷新",
     "refresh": "刷新"
   },
+  "aliases": {
+    "label": "别名",
+    "placeholder": "添加别名，按 Enter 确认...",
+    "add": "添加",
+    "count": "别名 ({{count}}/{{max}})",
+    "empty": "别名不能为空",
+    "tooLong": "单个别名不能超过 {{max}} 个字符",
+    "maxReached": "每个条目最多 {{max}} 个别名",
+    "duplicate": "该别名已存在",
+    "sameAsName": "别名不能与正式名称相同",
+    "clearAll": "清空全部别名",
+    "remove": "删除别名 {{alias}}"
+  },
   "auth": {
     "passwordPlaceholder": "请输入密码",
     "submit": "登录",

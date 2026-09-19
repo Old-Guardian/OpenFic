@@ -7,6 +7,7 @@ export interface Character {
   description: string;
   imageUrl: string | null;
   isFavorited: boolean;
+  aliases: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -18,6 +19,7 @@ export interface CharacterListItem {
   imageUrl: string | null;
   tokenCount: number;
   isFavorited: boolean;
+  aliases: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -26,6 +28,7 @@ export interface CharacterCreate {
   name: string;
   description?: string;
   image?: File | null;
+  aliases?: string[];
 }
 
 export interface CharacterUpdate {
@@ -33,6 +36,7 @@ export interface CharacterUpdate {
   description?: string;
   image?: File | null;
   isFavorited?: boolean;
+  aliases?: string[];
 }
 
 export interface CharacterListResponse {

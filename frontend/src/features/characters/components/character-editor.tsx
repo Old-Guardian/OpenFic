@@ -3,7 +3,7 @@ import type { Editor } from "@tiptap/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { MarkdownEditor, Spinner } from "@/components";
+import { AliasInput, MarkdownEditor, Spinner } from "@/components";
 import { toast } from "@/components/toast";
 import type { Character } from "@/lib/character.types";
 import {
@@ -20,7 +20,7 @@ interface CharacterEditorProps {
   isSaving?: boolean;
   isLoading?: boolean;
   isAgentLocked?: boolean;
-  onSave: (data: { name: string; description: string }) => Promise<void> | void;
+  onSave: (data: { name: string; description: string; aliases: string[] }) => Promise<void> | void;
 }
 
 export function CharacterEditor({
@@ -33,6 +33,7 @@ export function CharacterEditor({
   const { t } = useTranslation();
   const [name, setName] = useState(character?.name ?? "");
   const [description, setDescription] = useState(character?.description ?? "");
+  const [aliases, setAliases] = useState<string[]>(character?.aliases ?? []);
   const [tokenCount, setTokenCount] = useState(countTokens(character?.description ?? ""));
   const [hasChanges, setHasChanges] = useState(false);
   const editorRef = useRef<Editor | null>(null);
@@ -40,6 +41,7 @@ export function CharacterEditor({
   const latestValueRef = useRef({
     name: character?.name ?? "",
     description: character?.description ?? "",
+    aliases: character?.aliases ?? [],
   });
   const hasChangesRef = useRef(false);
   const isSavingRef = useRef(false);
@@ -73,10 +75,11 @@ export function CharacterEditor({
       return;
     }
     rejectedContentRef.current = null;
+    const nextAliases = latestValueRef.current.aliases;
 
     isSavingRef.current = true;
     try {
-      await onSave({ name: nextName, description });
+      await onSave({ name: nextName, description, aliases: nextAliases });
       hasChangesRef.current = false;
       setHasChanges(false);
     } catch {
@@ -99,6 +102,17 @@ export function CharacterEditor({
     (value: string) => {
       setName(value);
       latestValueRef.current.name = value;
+      hasChangesRef.current = true;
+      setHasChanges(true);
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
+  const handleAliasesChange = useCallback(
+    (nextAliases: string[]) => {
+      setAliases(nextAliases);
+      latestValueRef.current.aliases = nextAliases;
       hasChangesRef.current = true;
       setHasChanges(true);
       scheduleSave();
@@ -133,7 +147,8 @@ export function CharacterEditor({
 
     const hasSameContent =
       latestValueRef.current.name === character.name &&
-      latestValueRef.current.description === character.description;
+      latestValueRef.current.description === character.description &&
+      JSON.stringify(latestValueRef.current.aliases) === JSON.stringify(character.aliases ?? []);
     if (hasSameContent) return;
 
     if (saveTimerRef.current) {
@@ -142,10 +157,12 @@ export function CharacterEditor({
     }
     setName(character.name);
     setDescription(character.description);
+    setAliases(character.aliases ?? []);
     setTokenCount(countTokens(character.description));
     latestValueRef.current = {
       name: character.name,
       description: character.description,
+      aliases: character.aliases ?? [],
     };
     hasChangesRef.current = false;
     setHasChanges(false);
@@ -197,6 +214,14 @@ export function CharacterEditor({
     <MarkdownEditor
       title={name}
       onTitleChange={handleTitleChange}
+      belowTitle={
+        <AliasInput
+          aliases={aliases}
+          onChange={handleAliasesChange}
+          entityName={name}
+          disabled={isAgentLocked}
+        />
+      }
       content={description}
       onContentChange={handleContentChange}
       onSave={handleSave}
