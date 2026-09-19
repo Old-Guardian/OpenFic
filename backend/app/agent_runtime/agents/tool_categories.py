@@ -26,13 +26,23 @@ TOOL_CATEGORIES: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "read_chapter_summaries",
             "read_range_summaries",
         ),
-        "character_read": ("list_characters", "read_character"),
+        "character_read": (
+            "list_characters",
+            "search_characters",
+            "read_character",
+            "read_characters",
+        ),
         "character_write": (
             "create_character",
             "edit_character",
             "delete_character",
         ),
-        "world_read": ("list_world_entries", "read_world_entry"),
+        "world_read": (
+            "list_world_entries",
+            "search_world_entries",
+            "read_world_entry",
+            "read_world_entries",
+        ),
         "world_write": (
             "create_world_entry",
             "edit_world_entry",

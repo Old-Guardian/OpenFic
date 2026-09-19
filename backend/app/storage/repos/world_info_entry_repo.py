@@ -123,6 +123,59 @@ async def list_enabled_by_world_info(
     return list(result.scalars().all())
 
 
+async def count_enabled_by_world_info(session: AsyncSession, world_info_id: str) -> int:
+    """统计世界书内启用条目总数。"""
+    result = await session.execute(
+        select(func.count(col(WorldInfoEntry.id))).where(
+            col(WorldInfoEntry.world_info_id) == world_info_id,
+            col(WorldInfoEntry.is_enabled) == True,  # noqa: E712
+        )
+    )
+    return result.scalar_one()
+
+
+async def list_enabled_page(
+    session: AsyncSession,
+    world_info_id: str,
+    *,
+    limit: int,
+    offset: int,
+) -> list[WorldInfoEntry]:
+    """按 order 稳定分页获取世界书内启用条目。"""
+    result = await session.execute(
+        select(WorldInfoEntry)
+        .where(
+            col(WorldInfoEntry.world_info_id) == world_info_id,
+            col(WorldInfoEntry.is_enabled) == True,  # noqa: E712
+        )
+        .order_by(col(WorldInfoEntry.order).asc(), col(WorldInfoEntry.id).asc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(result.scalars().all())
+
+
+async def list_by_name(
+    session: AsyncSession,
+    world_info_id: str,
+    name: str,
+) -> list[WorldInfoEntry]:
+    """按正式名称精确查询条目，包含禁用项。
+
+    调用方需要据禁用状态给出明确错误，因此这里不能过滤 ``is_enabled``，
+    否则被禁用的同名条目会退化成「不存在」。
+    """
+    result = await session.execute(
+        select(WorldInfoEntry)
+        .where(
+            col(WorldInfoEntry.world_info_id) == world_info_id,
+            col(WorldInfoEntry.name) == name,
+        )
+        .order_by(col(WorldInfoEntry.id).asc())
+    )
+    return list(result.scalars().all())
+
+
 async def search_by_world_info(
     session: AsyncSession,
     world_info_id: str,

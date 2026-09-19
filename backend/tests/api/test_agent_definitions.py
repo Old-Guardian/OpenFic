@@ -80,7 +80,7 @@ async def test_list_agent_tool_categories(client: AsyncClient):
     assert character_read == {
         "key": "character_read",
         "name": "角色读取",
-        "tool_keys": ["list_characters", "read_character"],
+        "tool_keys": ["list_characters", "search_characters", "read_character", "read_characters"],
     }
 
     character_write = next(item for item in data["categories"] if item["key"] == "character_write")

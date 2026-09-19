@@ -546,3 +546,159 @@ async def test_serialized_output_budget_shrinking() -> None:
     decoded = knowledge_search_service.decode_cursor(shrunk_resp.next_cursor)
     assert decoded.offset == len(shrunk_resp.items)
 
+
+
+@pytest.mark.asyncio
+async def test_list_world_entries_paginates_enabled_entries_only(session) -> None:
+    project = await _create_project(session)
+    world = await _create_world_info(session, project)
+    entries = [
+        WorldInfoEntry(
+            world_info_id=world.id,
+            uid=index,
+            name=f"条目{index:02d}",
+            order=index,
+            content="正文",
+            is_enabled=index % 2 == 1,
+        )
+        for index in range(1, 8)
+    ]
+    session.add_all(entries)
+    await session.flush()
+
+    page1 = await knowledge_search_service.list_world_entries(
+        session, project.id, limit=2
+    )
+    assert [item.name for item in page1.items] == ["条目01", "条目03"]
+    assert page1.total == 4
+    assert page1.has_more is True
+    assert page1.next_cursor is not None
+    assert page1.reason is None
+
+    page2 = await knowledge_search_service.list_world_entries(
+        session, project.id, limit=2, cursor=page1.next_cursor
+    )
+    assert [item.name for item in page2.items] == ["条目05", "条目07"]
+    assert page2.total == 4
+    assert page2.has_more is False
+    assert page2.next_cursor is None
+
+    collected = [item.name for item in (*page1.items, *page2.items)]
+    assert collected == ["条目01", "条目03", "条目05", "条目07"]
+
+
+@pytest.mark.asyncio
+async def test_list_world_entries_reports_missing_world_book(session) -> None:
+    project = await _create_project(session, "未绑定世界书")
+
+    page = await knowledge_search_service.list_world_entries(
+        session, project.id, limit=20
+    )
+
+    assert page.items == []
+    assert page.total == 0
+    assert page.has_more is False
+    assert page.reason is SearchReason.NO_WORLD_BOOK
+
+
+@pytest.mark.asyncio
+async def test_list_characters_cursor_is_scoped_and_stales_on_change(session) -> None:
+    project = await _create_project(session)
+    other = await _create_project(session, "另一个项目")
+    characters = [
+        Character(project_id=project.id, name=f"角色{index:02d}", description="描述")
+        for index in range(3)
+    ]
+    session.add_all(characters)
+    await session.flush()
+
+    page1 = await knowledge_search_service.list_characters(session, project.id, limit=2)
+    assert page1.total == 3
+    assert page1.has_more is True
+    cursor = page1.next_cursor
+    assert cursor is not None
+
+    # 换 limit 后 cursor 失效
+    with pytest.raises(KnowledgeSearchError) as exc_limit:
+        await knowledge_search_service.list_characters(
+            session, project.id, limit=1, cursor=cursor
+        )
+    assert exc_limit.value.code == KnowledgeErrorCode.INVALID_CURSOR
+
+    # 跨项目复用失效
+    with pytest.raises(KnowledgeSearchError) as exc_project:
+        await knowledge_search_service.list_characters(
+            session, other.id, limit=2, cursor=cursor
+        )
+    assert exc_project.value.code == KnowledgeErrorCode.INVALID_CURSOR
+
+    # 数据变化后失效
+    await character_service.update_character(session, characters[0].id, aliases=["别称"])
+    with pytest.raises(KnowledgeSearchError) as exc_stale:
+        await knowledge_search_service.list_characters(
+            session, project.id, limit=2, cursor=cursor
+        )
+    assert exc_stale.value.code == KnowledgeErrorCode.CURSOR_STALE
+
+    # 重新从第一页列举可正常继续
+    fresh = await knowledge_search_service.list_characters(session, project.id, limit=2)
+    assert fresh.next_cursor is not None
+    page2 = await knowledge_search_service.list_characters(
+        session, project.id, limit=2, cursor=fresh.next_cursor
+    )
+    assert page2.total == 3
+    assert page2.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_list_and_search_cursors_are_not_interchangeable(session) -> None:
+    project = await _create_project(session)
+    world = await _create_world_info(session, project)
+    entries = [
+        WorldInfoEntry(
+            world_info_id=world.id,
+            uid=index,
+            name=f"目标条目{index}",
+            order=index,
+            content="正文",
+            is_enabled=True,
+        )
+        for index in range(1, 4)
+    ]
+    session.add_all(entries)
+    await session.flush()
+
+    page = await knowledge_search_service.list_world_entries(
+        session, project.id, limit=1
+    )
+    assert page.next_cursor is not None
+
+    # 目录 cursor 不能用于搜索
+    with pytest.raises(KnowledgeSearchError) as exc_cross:
+        await knowledge_search_service.search_world_entries(
+            session,
+            project.id,
+            KnowledgeSearchRequest(query="目标条目", limit=1, cursor=page.next_cursor),
+        )
+    assert exc_cross.value.code == KnowledgeErrorCode.INVALID_CURSOR
+
+    search = await knowledge_search_service.search_world_entries(
+        session, project.id, KnowledgeSearchRequest(query="目标条目", limit=1)
+    )
+    assert search.next_cursor is not None
+
+    # 搜索 cursor 不能用于目录
+    with pytest.raises(KnowledgeSearchError) as exc_reverse:
+        await knowledge_search_service.list_world_entries(
+            session, project.id, limit=1, cursor=search.next_cursor
+        )
+    assert exc_reverse.value.code == KnowledgeErrorCode.INVALID_CURSOR
+
+
+@pytest.mark.asyncio
+async def test_list_world_entries_requires_existing_project(session) -> None:
+    with pytest.raises(KnowledgeSearchError) as exc_info:
+        await knowledge_search_service.list_world_entries(
+            session, "missing-project", limit=20
+        )
+    assert exc_info.value.code == KnowledgeErrorCode.CONTEXT_ERROR

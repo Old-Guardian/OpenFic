@@ -41,12 +41,16 @@ def test_runtime_tool_permissions_match_registered_user_tools() -> None:
         {"tool_name": "read_chapter", "mode": "allow"},
         {"tool_name": "read_chapter_summaries", "mode": "allow"},
         {"tool_name": "read_character", "mode": "allow"},
+        {"tool_name": "read_characters", "mode": "allow"},
         {"tool_name": "read_note", "mode": "allow"},
         {"tool_name": "read_range_summaries", "mode": "allow"},
+        {"tool_name": "read_world_entries", "mode": "allow"},
         {"tool_name": "read_world_entry", "mode": "allow"},
         {"tool_name": "recycle_subagent", "mode": "allow"},
         {"tool_name": "reference_skill", "mode": "allow"},
         {"tool_name": "search_chapters", "mode": "allow"},
+        {"tool_name": "search_characters", "mode": "allow"},
+        {"tool_name": "search_world_entries", "mode": "allow"},
         {"tool_name": "update_index", "mode": "allow"},
         {"tool_name": "web_fetch", "mode": "allow"},
         {"tool_name": "web_search", "mode": "allow"},
@@ -67,3 +71,49 @@ def test_runtime_tool_permission_helpers_use_tool_names() -> None:
     assert get_default_tool_permission_mode("search_chapters") == "allow"
     assert get_default_tool_permission_mode("write_chapter") == "ask"
     assert get_default_tool_permission_mode("unknown_tool") is None
+
+
+def test_read_only_categories_do_not_leak_new_retrieval_tools() -> None:
+    from app.agent_runtime.agents.tool_categories import get_tool_names_for_categories
+
+    world_read = set(get_tool_names_for_categories(["world_read"]))
+    character_read = set(get_tool_names_for_categories(["character_read"]))
+
+    assert {
+        "list_world_entries",
+        "search_world_entries",
+        "read_world_entry",
+        "read_world_entries",
+    } <= world_read
+    assert {
+        "list_characters",
+        "search_characters",
+        "read_character",
+        "read_characters",
+    } <= character_read
+
+    # 只有世界书读取类别才能调用世界书检索/读取工具，反之亦然
+    assert world_read.isdisjoint(
+        {"list_characters", "search_characters", "read_character", "read_characters"}
+    )
+    assert character_read.isdisjoint(
+        {
+            "list_world_entries",
+            "search_world_entries",
+            "read_world_entry",
+            "read_world_entries",
+        }
+    )
+
+    # 写工具不会因为只读类别而被开放
+    assert world_read.isdisjoint({"create_world_entry", "edit_world_entry"})
+    assert character_read.isdisjoint({"create_character", "edit_character"})
+
+    # 四个新工具都是只读且默认放行
+    for tool_name in (
+        "search_world_entries",
+        "search_characters",
+        "read_world_entries",
+        "read_characters",
+    ):
+        assert get_default_tool_permission_mode(tool_name) == "allow"

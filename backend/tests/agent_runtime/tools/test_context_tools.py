@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+VERSION = "sha256:" + "a" * 64
+
 
 def _make_state() -> dict:
     return {
@@ -172,60 +174,177 @@ async def test_read_range_summaries_returns_ascending_page() -> None:
 @pytest.mark.asyncio
 async def test_list_characters_returns_project_character_names() -> None:
     from app.agent_runtime.tools.impls.context.character import ListCharactersTool
+    from app.storage.services.knowledge_search_service import KnowledgeListPage
 
     tool = ListCharactersTool(_state=_make_state())
     characters = [
-        SimpleNamespace(id="char-1", name="林舟", description="主角", is_favorited=True),
-        SimpleNamespace(id="char-2", name="沈墨", description="反派", is_favorited=False),
+        SimpleNamespace(id="char-1", name="林舟"),
+        SimpleNamespace(id="char-2", name="沈墨"),
     ]
 
     with patch(
         "app.agent_runtime.tools.impls.context.character.create_session"
     ) as mock_cs, patch(
-        "app.agent_runtime.tools.impls.context.character.character_repo"
-    ) as mock_character_repo:
+        "app.agent_runtime.tools.impls.context.character.knowledge_search_service"
+    ) as mock_search_service:
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
-        mock_character_repo.list_all_by_project = AsyncMock(return_value=characters)
+        mock_search_service.list_characters = AsyncMock(
+            return_value=KnowledgeListPage(
+                items=characters, total=2, has_more=False, next_cursor=None
+            )
+        )
 
         result = await tool.ainvoke({})
 
     assert json.loads(result) == {
         "characters": [
-            {"name": "林舟"},
-            {"name": "沈墨"},
-        ]
+            {"name": "林舟", "id": "char-1"},
+            {"name": "沈墨", "id": "char-2"},
+        ],
+        "returned_count": 2,
+        "total_count": 2,
+        "has_more": False,
+        "next_cursor": None,
     }
+    list_call = mock_search_service.list_characters.await_args
+    assert list_call is not None
+    assert list_call.kwargs == {
+        "limit": 20,
+        "cursor": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_characters_rejects_limit_above_cap() -> None:
+    from app.agent_runtime.tools.impls.context.character import ListCharactersTool
+
+    tool = ListCharactersTool(_state=_make_state())
+
+    result = await tool.ainvoke({"limit": 51})
+
+    data = json.loads(result)
+    assert data["type"] == "fail"
+    assert "limit 必须在 1~50 之间" in data["message"]
 
 
 @pytest.mark.asyncio
 async def test_read_character_reads_description_by_name() -> None:
     from app.agent_runtime.tools.impls.context.character import ReadCharacterTool
+    from app.storage.services.knowledge_contracts import (
+        KnowledgeReadItem,
+        KnowledgeReadResponse,
+        ReadStatus,
+    )
 
     tool = ReadCharacterTool(_state=_make_state())
-    characters = [
-        SimpleNamespace(
-            id="char-1",
-            name="林舟",
-            description="主角\n旧友",
-            is_favorited=True,
-        ),
-    ]
+    character = SimpleNamespace(id="char-1", name="林舟", description="主角\n旧友")
+    read_item = KnowledgeReadItem(
+        id="char-1",
+        status=ReadStatus.OK,
+        name="林舟",
+        content_version=VERSION,
+        total_chars=5,
+        start_offset=0,
+        end_offset=5,
+        start_line=1,
+        start_line_offset=0,
+        content="主角\n旧友",
+        truncated=False,
+    )
 
     with patch(
         "app.agent_runtime.tools.impls.context.character.create_session"
     ) as mock_cs, patch(
         "app.agent_runtime.tools.impls.context.character.character_repo"
-    ) as mock_character_repo:
+    ) as mock_character_repo, patch(
+        "app.agent_runtime.tools.impls.context.character.knowledge_read_service"
+    ) as mock_read_service:
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
-        mock_character_repo.list_all_by_project = AsyncMock(return_value=characters)
+        mock_character_repo.list_by_project_and_name = AsyncMock(return_value=[character])
+        mock_read_service.read_characters = AsyncMock(
+            return_value=KnowledgeReadResponse(
+                items=[read_item],
+                returned_count=1,
+                partial_failure=False,
+                budget_exhausted=False,
+            )
+        )
 
         result = await tool.ainvoke({"name": "林舟"})
 
     assert json.loads(result) == {
         "name": "林舟",
+        "id": "char-1",
         "description": "1|主角\n2|旧友",
+        "total_chars": 5,
+        "content_version": VERSION,
+        "truncated": False,
+        "next_start_offset": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_character_points_at_continuation_when_truncated() -> None:
+    from app.agent_runtime.tools.impls.context.character import ReadCharacterTool
+    from app.storage.services.knowledge_contracts import (
+        KnowledgeReadItem,
+        KnowledgeReadResponse,
+        ReadStatus,
+    )
+
+    tool = ReadCharacterTool(_state=_make_state())
+    character = SimpleNamespace(id="char-1", name="林舟", description="长" * 9000)
+    read_item = KnowledgeReadItem(
+        id="char-1",
+        status=ReadStatus.OK,
+        name="林舟",
+        content_version=VERSION,
+        total_chars=9000,
+        start_offset=0,
+        end_offset=4000,
+        start_line=1,
+        start_line_offset=0,
+        content="长" * 4000,
+        truncated=True,
+        next_start_offset=4000,
+    )
+
+    with patch(
+        "app.agent_runtime.tools.impls.context.character.create_session"
+    ) as mock_cs, patch(
+        "app.agent_runtime.tools.impls.context.character.character_repo"
+    ) as mock_character_repo, patch(
+        "app.agent_runtime.tools.impls.context.character.knowledge_read_service"
+    ) as mock_read_service:
+        mock_cs.return_value = AsyncMock()
+        mock_character_repo.list_by_project_and_name = AsyncMock(return_value=[character])
+        mock_read_service.read_characters = AsyncMock(
+            return_value=KnowledgeReadResponse(
+                items=[read_item],
+                returned_count=1,
+                partial_failure=False,
+                budget_exhausted=False,
+            )
+        )
+
+        result = await tool.ainvoke({"name": "林舟"})
+
+    data = json.loads(result)
+    assert data["truncated"] is True
+    assert data["next_start_offset"] == 4000
+    assert data["next_read"] == {
+        "tool": "read_characters",
+        "args": {
+            "items": [
+                {
+                    "id": "char-1",
+                    "start_offset": 4000,
+                    "expected_version": VERSION,
+                }
+            ]
+        },
     }
 
 
@@ -255,10 +374,13 @@ async def test_create_character_returns_diff() -> None:
         "app.agent_runtime.tools.impls.context.character.character_images_by_id",
         new_callable=AsyncMock,
         return_value={},
-    ):
+    ), patch(
+        "app.agent_runtime.tools.impls.context.character.knowledge_alias_service"
+    ) as mock_alias_service:
+        mock_alias_service.list_character_aliases = AsyncMock(return_value=[])
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
-        mock_character_repo.list_all_by_project = AsyncMock(return_value=[])
+        mock_character_repo.list_by_project_and_name = AsyncMock(return_value=[])
         mock_character_service.create_character = AsyncMock(return_value=created)
         mock_record_diffs.return_value = ["char-1"]
 
@@ -314,7 +436,7 @@ async def test_create_character_serializes_parallel_creates_per_project() -> Non
         f"{ch_name}.record_character_diffs", AsyncMock()
     ):
         mock_cs.return_value = AsyncMock()
-        mock_repo.list_all_by_project = AsyncMock(side_effect=list_characters)
+        mock_repo.list_by_project_and_name = AsyncMock(side_effect=list_characters)
         mock_service.create_character = AsyncMock(return_value=created)
 
         def make_tool():
@@ -399,10 +521,13 @@ async def test_edit_character_replaces_description_text() -> None:
         "app.agent_runtime.tools.impls.context.character.character_images_by_id",
         new_callable=AsyncMock,
         return_value={},
-    ):
+    ), patch(
+        "app.agent_runtime.tools.impls.context.character.knowledge_alias_service"
+    ) as mock_alias_service:
+        mock_alias_service.list_character_aliases = AsyncMock(return_value=[])
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
-        mock_character_repo.list_all_by_project = AsyncMock(return_value=[character])
+        mock_character_repo.list_by_project_and_name = AsyncMock(return_value=[character])
         mock_character_service.update_character = AsyncMock(return_value=updated_character)
         mock_record_diffs.return_value = ["char-1"]
 
@@ -453,9 +578,12 @@ async def test_edit_character_rejects_over_limit_replacement_without_updating() 
         "app.agent_runtime.tools.impls.context.character.character_repo"
     ) as mock_character_repo, patch(
         "app.agent_runtime.tools.impls.context.character.character_service"
-    ) as mock_character_service:
+    ) as mock_character_service, patch(
+        "app.agent_runtime.tools.impls.context.character.knowledge_alias_service"
+    ) as mock_alias_service:
         mock_cs.return_value = AsyncMock()
-        mock_character_repo.list_all_by_project = AsyncMock(return_value=[character])
+        mock_alias_service.list_character_aliases = AsyncMock(return_value=[])
+        mock_character_repo.list_by_project_and_name = AsyncMock(return_value=[character])
         mock_character_service.update_character = AsyncMock()
 
         result = await tool.ainvoke(
@@ -495,10 +623,13 @@ async def test_delete_character_removes_name() -> None:
         "app.agent_runtime.tools.impls.context.character.character_images_by_id",
         new_callable=AsyncMock,
         return_value={},
-    ):
+    ), patch(
+        "app.agent_runtime.tools.impls.context.character.knowledge_alias_service"
+    ) as mock_alias_service:
+        mock_alias_service.list_character_aliases = AsyncMock(return_value=[])
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
-        mock_character_repo.list_all_by_project = AsyncMock(return_value=[character])
+        mock_character_repo.list_by_project_and_name = AsyncMock(return_value=[character])
         mock_character_service.delete_character = AsyncMock(return_value=None)
         mock_record_diffs.return_value = ["char-1"]
 
@@ -515,43 +646,104 @@ async def test_delete_character_removes_name() -> None:
 @pytest.mark.asyncio
 async def test_list_world_entries_returns_enabled_entry_titles() -> None:
     from app.agent_runtime.tools.impls.context.world_entry import ListWorldEntriesTool
+    from app.storage.services.knowledge_search_service import KnowledgeListPage
 
     tool = ListWorldEntriesTool(_state=_make_state())
     entries = [
-        SimpleNamespace(id="e1", name="主角", uid=1, order=1, content="林舟"),
-        SimpleNamespace(id="e2", name="势力", uid=2, order=2, content="青岚会"),
+        SimpleNamespace(id="e1", name="主角", uid=1, order=1),
+        SimpleNamespace(id="e2", name="势力", uid=2, order=2),
     ]
 
     with patch(
         "app.agent_runtime.tools.impls.context.world_entry.create_session"
     ) as mock_cs, patch(
-        "app.agent_runtime.tools.impls.context.world_entry.world_info_repo"
-    ) as mock_world_repo, patch(
-        "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_repo"
-    ) as mock_entry_repo:
+        "app.agent_runtime.tools.impls.context.world_entry.knowledge_search_service"
+    ) as mock_search_service:
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
-        mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
-        mock_entry_repo.list_enabled_by_world_info = AsyncMock(return_value=entries)
+        mock_search_service.list_world_entries = AsyncMock(
+            return_value=KnowledgeListPage(
+                items=entries, total=5, has_more=True, next_cursor="cursor-1"
+            )
+        )
 
         result = await tool.ainvoke({})
 
     assert json.loads(result) == {
         "entries": [
-            {"title": "主角", "uid": 1, "order": 1},
-            {"title": "势力", "uid": 2, "order": 2},
-        ]
+            {"title": "主角", "uid": 1, "order": 1, "id": "e1"},
+            {"title": "势力", "uid": 2, "order": 2, "id": "e2"},
+        ],
+        "returned_count": 2,
+        "total_count": 5,
+        "has_more": True,
+        "next_cursor": "cursor-1",
     }
+    list_call = mock_search_service.list_world_entries.await_args
+    assert list_call is not None
+    assert list_call.kwargs == {
+        "limit": 20,
+        "cursor": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_world_entries_reports_unbound_world_book() -> None:
+    from app.agent_runtime.tools.impls.context.world_entry import ListWorldEntriesTool
+    from app.storage.services.knowledge_contracts import SearchReason
+    from app.storage.services.knowledge_search_service import KnowledgeListPage
+
+    tool = ListWorldEntriesTool(_state=_make_state())
+
+    with patch(
+        "app.agent_runtime.tools.impls.context.world_entry.create_session"
+    ) as mock_cs, patch(
+        "app.agent_runtime.tools.impls.context.world_entry.knowledge_search_service"
+    ) as mock_search_service:
+        mock_cs.return_value = AsyncMock()
+        mock_search_service.list_world_entries = AsyncMock(
+            return_value=KnowledgeListPage(
+                items=[],
+                total=0,
+                has_more=False,
+                next_cursor=None,
+                reason=SearchReason.NO_WORLD_BOOK,
+            )
+        )
+
+        result = await tool.ainvoke({})
+
+    data = json.loads(result)
+    assert data["type"] == "fail"
+    assert data["message"] == "当前项目未绑定世界书"
 
 
 @pytest.mark.asyncio
 async def test_read_world_entry_reads_content_by_title() -> None:
     from app.agent_runtime.tools.impls.context.world_entry import ReadWorldEntryTool
+    from app.storage.services.knowledge_contracts import (
+        KnowledgeReadItem,
+        KnowledgeReadResponse,
+        ReadStatus,
+    )
 
     tool = ReadWorldEntryTool(_state=_make_state())
-    entries = [
-        SimpleNamespace(id="e1", name="主角", uid=1, order=1, content="林舟\n旧友"),
-    ]
+    entry = SimpleNamespace(
+        id="e1", name="主角", uid=1, order=1, content="林舟\n旧友", is_enabled=True
+    )
+    read_item = KnowledgeReadItem(
+        id="e1",
+        status=ReadStatus.OK,
+        name="主角",
+        content_version=VERSION,
+        total_chars=5,
+        start_offset=0,
+        end_offset=5,
+        start_line=1,
+        start_line_offset=0,
+        content="林舟\n旧友",
+        truncated=False,
+    )
 
     with patch(
         "app.agent_runtime.tools.impls.context.world_entry.create_session"
@@ -559,11 +751,21 @@ async def test_read_world_entry_reads_content_by_title() -> None:
         "app.agent_runtime.tools.impls.context.world_entry.world_info_repo"
     ) as mock_world_repo, patch(
         "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_repo"
-    ) as mock_entry_repo:
+    ) as mock_entry_repo, patch(
+        "app.agent_runtime.tools.impls.context.world_entry.knowledge_read_service"
+    ) as mock_read_service:
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
         mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
-        mock_entry_repo.list_all_by_world_info = AsyncMock(return_value=entries)
+        mock_entry_repo.list_by_name = AsyncMock(return_value=[entry])
+        mock_read_service.read_world_entries = AsyncMock(
+            return_value=KnowledgeReadResponse(
+                items=[read_item],
+                returned_count=1,
+                partial_failure=False,
+                budget_exhausted=False,
+            )
+        )
 
         result = await tool.ainvoke({"title": "主角"})
 
@@ -571,8 +773,45 @@ async def test_read_world_entry_reads_content_by_title() -> None:
         "title": "主角",
         "uid": 1,
         "order": 1,
+        "id": "e1",
         "content": "1|林舟\n2|旧友",
+        "total_chars": 5,
+        "content_version": VERSION,
+        "truncated": False,
+        "next_start_offset": None,
     }
+    read_call = mock_read_service.read_world_entries.await_args
+    assert read_call is not None
+    called_request = read_call.args[2]
+    assert called_request.max_chars_per_item == 4000
+
+
+@pytest.mark.asyncio
+async def test_read_world_entry_rejects_disabled_entry_without_content() -> None:
+    from app.agent_runtime.tools.impls.context.world_entry import ReadWorldEntryTool
+
+    tool = ReadWorldEntryTool(_state=_make_state())
+    entry = SimpleNamespace(
+        id="e1", name="禁用条目", uid=1, order=1, content="机密正文", is_enabled=False
+    )
+
+    with patch(
+        "app.agent_runtime.tools.impls.context.world_entry.create_session"
+    ) as mock_cs, patch(
+        "app.agent_runtime.tools.impls.context.world_entry.world_info_repo"
+    ) as mock_world_repo, patch(
+        "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_repo"
+    ) as mock_entry_repo:
+        mock_cs.return_value = AsyncMock()
+        mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
+        mock_entry_repo.list_by_name = AsyncMock(return_value=[entry])
+
+        result = await tool.ainvoke({"title": "禁用条目"})
+
+    data = json.loads(result)
+    assert data["type"] == "fail"
+    assert "已禁用" in data["message"]
+    assert "机密正文" not in result
 
 
 @pytest.mark.asyncio
@@ -581,8 +820,8 @@ async def test_read_world_entry_rejects_duplicate_titles() -> None:
 
     tool = ReadWorldEntryTool(_state=_make_state())
     entries = [
-        SimpleNamespace(id="e1", name="主角", uid=1, order=1, content="一"),
-        SimpleNamespace(id="e2", name="主角", uid=2, order=2, content="二"),
+        SimpleNamespace(id="e1", name="主角", uid=1, order=1, content="一", is_enabled=True),
+        SimpleNamespace(id="e2", name="主角", uid=2, order=2, content="二", is_enabled=True),
     ]
 
     with patch(
@@ -595,13 +834,14 @@ async def test_read_world_entry_rejects_duplicate_titles() -> None:
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
         mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
-        mock_entry_repo.list_all_by_world_info = AsyncMock(return_value=entries)
+        mock_entry_repo.list_by_name = AsyncMock(return_value=entries)
 
         result = await tool.ainvoke({"title": "主角"})
 
     data = json.loads(result)
     assert data["type"] == "fail"
-    assert data["message"] == "世界书条目标题不唯一: 主角"
+    assert data["message"].startswith("世界书条目标题不唯一: 主角")
+    assert "search_world_entries" in data["message"]
 
 
 @pytest.mark.asyncio
@@ -634,11 +874,14 @@ async def test_create_world_entry_returns_diff() -> None:
         "app.agent_runtime.tools.impls.context.world_entry.world_entry_images_by_id",
         new_callable=AsyncMock,
         return_value={},
-    ):
+    ), patch(
+        "app.agent_runtime.tools.impls.context.world_entry.knowledge_alias_service"
+    ) as mock_alias_service:
+        mock_alias_service.list_entry_aliases = AsyncMock(return_value=[])
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
         mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
-        mock_entry_repo.list_all_by_world_info = AsyncMock(return_value=[])
+        mock_entry_repo.list_by_name = AsyncMock(return_value=[])
         mock_entry_service.create_entry = AsyncMock(return_value=created)
         mock_record_diffs.return_value = ["e1"]
 
@@ -707,7 +950,7 @@ async def test_create_world_entry_serializes_parallel_creates_per_world() -> Non
     ):
         mock_cs.return_value = AsyncMock()
         mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
-        mock_entry_repo.list_all_by_world_info = AsyncMock(side_effect=list_entries)
+        mock_entry_repo.list_by_name = AsyncMock(side_effect=list_entries)
         mock_entry_service.create_entry = AsyncMock(return_value=created)
 
         def make_tool():
@@ -744,7 +987,7 @@ async def test_create_world_entry_rejects_duplicate_title() -> None:
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
         mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
-        mock_entry_repo.list_all_by_world_info = AsyncMock(
+        mock_entry_repo.list_by_name = AsyncMock(
             return_value=[SimpleNamespace(id="e1", name="主角", uid=1, order=1, content="")]
         )
 
@@ -827,11 +1070,14 @@ async def test_edit_world_entry_returns_diff() -> None:
         "app.agent_runtime.tools.impls.context.world_entry.world_entry_images_by_id",
         new_callable=AsyncMock,
         return_value={},
-    ):
+    ), patch(
+        "app.agent_runtime.tools.impls.context.world_entry.knowledge_alias_service"
+    ) as mock_alias_service:
+        mock_alias_service.list_entry_aliases = AsyncMock(return_value=[])
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
         mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
-        mock_entry_repo.list_all_by_world_info = AsyncMock(return_value=[entry])
+        mock_entry_repo.list_by_name = AsyncMock(return_value=[entry])
         mock_entry_service.update_entry = AsyncMock(return_value=updated_entry)
         mock_record_diffs.return_value = ["e1"]
 
@@ -888,10 +1134,13 @@ async def test_edit_world_entry_rejects_over_limit_replacement_without_updating(
         "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_repo"
     ) as mock_entry_repo, patch(
         "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_service"
-    ) as mock_entry_service:
+    ) as mock_entry_service, patch(
+        "app.agent_runtime.tools.impls.context.world_entry.knowledge_alias_service"
+    ) as mock_alias_service:
         mock_cs.return_value = AsyncMock()
+        mock_alias_service.list_entry_aliases = AsyncMock(return_value=[])
         mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
-        mock_entry_repo.list_all_by_world_info = AsyncMock(return_value=[entry])
+        mock_entry_repo.list_by_name = AsyncMock(return_value=[entry])
         mock_entry_service.update_entry = AsyncMock()
 
         result = await tool.ainvoke(
@@ -922,11 +1171,17 @@ async def test_edit_world_entry_rejects_duplicate_new_title() -> None:
         "app.agent_runtime.tools.impls.context.world_entry.world_info_repo"
     ) as mock_world_repo, patch(
         "app.agent_runtime.tools.impls.context.world_entry.world_info_entry_repo"
-    ) as mock_entry_repo:
+    ) as mock_entry_repo, patch(
+        "app.agent_runtime.tools.impls.context.world_entry.knowledge_alias_service"
+    ) as mock_alias_service:
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
+        mock_alias_service.list_entry_aliases = AsyncMock(return_value=[])
         mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
-        mock_entry_repo.list_all_by_world_info = AsyncMock(return_value=entries)
+        by_name = {entry.name: [entry] for entry in entries}
+        mock_entry_repo.list_by_name = AsyncMock(
+            side_effect=lambda _session, _world_info_id, name: by_name.get(name, [])
+        )
 
         result = await tool.ainvoke({"title": "主角", "new_title": "反派"})
 
@@ -965,11 +1220,14 @@ async def test_delete_world_entry_removes_title() -> None:
         "app.agent_runtime.tools.impls.context.world_entry.world_entry_images_by_id",
         new_callable=AsyncMock,
         return_value={},
-    ):
+    ), patch(
+        "app.agent_runtime.tools.impls.context.world_entry.knowledge_alias_service"
+    ) as mock_alias_service:
+        mock_alias_service.list_entry_aliases = AsyncMock(return_value=[])
         mock_session = AsyncMock()
         mock_cs.return_value = mock_session
         mock_world_repo.get_by_project_id = AsyncMock(return_value=SimpleNamespace(id="world-1"))
-        mock_entry_repo.list_all_by_world_info = AsyncMock(return_value=[entry])
+        mock_entry_repo.list_by_name = AsyncMock(return_value=[entry])
         mock_entry_service.delete_entry = AsyncMock(return_value=None)
         mock_record_diffs.return_value = ["e1"]
 

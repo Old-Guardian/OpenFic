@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """Knowledge Search Service - 世界书与角色的关键词检索业务逻辑层。
 
-依据第一阶段实施方案 §5、§6.2 与 §8：
+依据第一阶段实施方案 §5、§6.2、§7.1 与 §8：
 - 严格校验 query（去首尾空白后 1～200 字符，最多 8 个词），match（all/any），limit（1～20）；
 - 严格校验与生成 base64url JSON cursor，包含协议版本、查询指纹与数据集指纹；
 - 项目或实体发生增删改、启停、别名变更时，数据集指纹变化导致 cursor_stale；
 - 正文切片（Search Excerpt）计算：最多 3 段，每段最多 240 字符，优先覆盖不同词，合并相邻区间，精准对应 1-based 行号；
-- 序列化输出限制不超过 32,768 字符，超限时逐项收缩当前页候选。
+- 序列化输出限制不超过 32,768 字符，超限时逐项收缩当前页候选；
+- 另提供旧列表工具使用的启用项目录分页（`list_world_entries` / `list_characters`），
+  复用同一 cursor 协议但使用独立的目录指纹，搜索与目录的 cursor 不可互换。
 """
 
 from __future__ import annotations
@@ -14,9 +16,11 @@ from __future__ import annotations
 import base64
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import json
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,8 +28,10 @@ from app.core.errors import OpenFicError
 from app.core.text_normalization import normalize_literal
 from app.storage.repos import (
     character_alias_repo,
+    character_repo,
     knowledge_search_repo,
     world_info_entry_alias_repo,
+    world_info_entry_repo,
 )
 from app.storage.services.knowledge_contracts import (
     MAX_CURSOR_CHARS,
@@ -718,3 +724,209 @@ async def search_characters(
         async with session.begin():
             return await _do_search_characters(session, project_id, request)
     return await _do_search_characters(session, project_id, request)
+
+
+# ============== 旧列表工具的启用项目录分页（§7.1） ==============
+
+
+@dataclass(frozen=True)
+class KnowledgeListPage:
+    """一页目录结果。
+
+    ``items`` 的元素类型随调用方选择的工具变化（``WorldInfoEntry`` 或
+    ``Character``）；目录只枚举启用项，``reason`` 仅在项目未绑定世界书时
+    非空。
+    """
+
+    items: list[Any]
+    total: int
+    has_more: bool
+    next_cursor: str | None
+    reason: SearchReason | None = None
+
+
+def compute_list_fingerprint(
+    *,
+    kind: KnowledgeKind,
+    project_id: str,
+    limit: int,
+) -> str:
+    """计算目录分页参数的规范指纹。
+
+    与搜索查询指纹使用同一编码方式但不同字段，因此搜索与目录的 cursor
+    不能互相复用（复用会得到 ``invalid_cursor``）。
+    """
+    canonical = {
+        "kind": kind.value,
+        "limit": limit,
+        "operation": "list",
+        "project_id": project_id,
+    }
+    encoded = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _resolve_list_offset(
+    *,
+    cursor: str | None,
+    kind: KnowledgeKind,
+    project_id: str,
+    limit: int,
+    query_fingerprint: str,
+    dataset_fingerprint: str,
+) -> int:
+    if cursor is None:
+        return 0
+    payload = decode_cursor(cursor)
+    return validate_cursor(
+        payload,
+        kind=kind,
+        project_id=project_id,
+        query_fingerprint=query_fingerprint,
+        dataset_fingerprint=dataset_fingerprint,
+        limit=limit,
+    )
+
+
+def _build_list_page(
+    *,
+    items: list[Any],
+    total: int,
+    kind: KnowledgeKind,
+    project_id: str,
+    limit: int,
+    offset: int,
+    query_fingerprint: str,
+    dataset_fingerprint: str,
+) -> KnowledgeListPage:
+    has_more = offset + len(items) < total
+    next_cursor = (
+        encode_cursor(
+            KnowledgeCursorPayload(
+                v=1,
+                kind=kind,
+                project_id=project_id,
+                query_fingerprint=query_fingerprint,
+                dataset_fingerprint=dataset_fingerprint,
+                limit=limit,
+                offset=offset + len(items),
+            )
+        )
+        if has_more
+        else None
+    )
+    return KnowledgeListPage(
+        items=items,
+        total=total,
+        has_more=has_more,
+        next_cursor=next_cursor,
+    )
+
+
+async def list_world_entries(
+    session: AsyncSession,
+    project_id: str,
+    *,
+    limit: int,
+    cursor: str | None = None,
+) -> KnowledgeListPage:
+    """分页枚举项目世界书中的启用条目，按 order 稳定排序。"""
+    project_exists = await knowledge_search_repo.check_project_exists(session, project_id)
+    if not project_exists:
+        raise KnowledgeSearchError(
+            code=KnowledgeErrorCode.CONTEXT_ERROR,
+            message=f"项目不存在: {project_id}",
+        )
+
+    world_info_id = await knowledge_search_repo.get_world_info_id_by_project(
+        session, project_id
+    )
+    if world_info_id is None:
+        return KnowledgeListPage(
+            items=[],
+            total=0,
+            has_more=False,
+            next_cursor=None,
+            reason=SearchReason.NO_WORLD_BOOK,
+        )
+
+    fingerprint_rows = await knowledge_search_repo.get_world_entries_fingerprint_rows(
+        session, world_info_id
+    )
+    dataset_fingerprint = compute_dataset_fingerprint(fingerprint_rows)
+    query_fingerprint = compute_list_fingerprint(
+        kind=KnowledgeKind.WORLD_ENTRY, project_id=project_id, limit=limit
+    )
+    offset = _resolve_list_offset(
+        cursor=cursor,
+        kind=KnowledgeKind.WORLD_ENTRY,
+        project_id=project_id,
+        limit=limit,
+        query_fingerprint=query_fingerprint,
+        dataset_fingerprint=dataset_fingerprint,
+    )
+    total = await world_info_entry_repo.count_enabled_by_world_info(session, world_info_id)
+    items = await world_info_entry_repo.list_enabled_page(
+        session, world_info_id, limit=limit, offset=offset
+    )
+    return _build_list_page(
+        items=items,
+        total=total,
+        kind=KnowledgeKind.WORLD_ENTRY,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
+        query_fingerprint=query_fingerprint,
+        dataset_fingerprint=dataset_fingerprint,
+    )
+
+
+async def list_characters(
+    session: AsyncSession,
+    project_id: str,
+    *,
+    limit: int,
+    cursor: str | None = None,
+) -> KnowledgeListPage:
+    """分页枚举项目角色，按收藏与更新时间稳定排序。"""
+    project_exists = await knowledge_search_repo.check_project_exists(session, project_id)
+    if not project_exists:
+        raise KnowledgeSearchError(
+            code=KnowledgeErrorCode.CONTEXT_ERROR,
+            message=f"项目不存在: {project_id}",
+        )
+
+    fingerprint_rows = await knowledge_search_repo.get_characters_fingerprint_rows(
+        session, project_id
+    )
+    dataset_fingerprint = compute_dataset_fingerprint(fingerprint_rows)
+    query_fingerprint = compute_list_fingerprint(
+        kind=KnowledgeKind.CHARACTER, project_id=project_id, limit=limit
+    )
+    offset = _resolve_list_offset(
+        cursor=cursor,
+        kind=KnowledgeKind.CHARACTER,
+        project_id=project_id,
+        limit=limit,
+        query_fingerprint=query_fingerprint,
+        dataset_fingerprint=dataset_fingerprint,
+    )
+    total = await character_repo.count_by_project(session, project_id)
+    items = await character_repo.list_page_by_project(
+        session, project_id, limit=limit, offset=offset
+    )
+    return _build_list_page(
+        items=items,
+        total=total,
+        kind=KnowledgeKind.CHARACTER,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
+        query_fingerprint=query_fingerprint,
+        dataset_fingerprint=dataset_fingerprint,
+    )
