@@ -980,6 +980,101 @@ test.describe("未保存离开保护与会话管理 (T5: 模拟会话保存失�
     expect(calls).toEqual([1]);
   });
 
+  test("P2.3: 草稿清理失败不放行离开，恢复后可重试放弃", async () => {
+    const store = useEditorSessionStore.getState();
+    let actionExecuted = false;
+    let discardAttempts = 0;
+    let storageAvailable = false;
+
+    store.registerSession({
+      documentKey: "note:p2-3",
+      entityType: "note",
+      entityId: "p2-3",
+      title: "清理失败的笔记",
+      isDirty: true,
+      isSaving: false,
+      save: async () => ({ status: "saved", savedRevision: 1 }),
+      discard: async () => {
+        discardAttempts++;
+        if (!storageAvailable) {
+          throw new Error("IndexedDB deletion failed");
+        }
+      },
+    });
+
+    const leavePromise = requestLeave("all", () => {
+      actionExecuted = true;
+    });
+
+    // 第一次放弃：清理失败，不得放行
+    store.chooseDecision("discard");
+    await flushAsync();
+
+    expect(actionExecuted).toBe(false);
+    const afterFailure = useEditorSessionStore.getState().dialogState;
+    expect(afterFailure?.isOpen).toBe(true);
+    expect(afterFailure?.isProcessing).toBe(false);
+    expect(afterFailure?.errorMessage).toContain("IndexedDB deletion failed");
+    expect(discardAttempts).toBe(1);
+
+    // 用户取消：仍留在原处
+    store.chooseDecision("cancel");
+    const cancelled = await leavePromise;
+    expect(cancelled).toBe(false);
+    expect(actionExecuted).toBe(false);
+
+    // 恢复存储后重新发起放弃：清理成功并放行
+    storageAvailable = true;
+    const secondLeave = requestLeave("all", () => {
+      actionExecuted = true;
+    });
+    store.chooseDecision("discard");
+    const allowed = await secondLeave;
+
+    expect(discardAttempts).toBe(2);
+    expect(allowed).toBe(true);
+    expect(actionExecuted).toBe(true);
+    expect(useEditorSessionStore.getState().dialogState).toBeNull();
+  });
+
+  test("P2.3: 放弃失败后可直接重试成功并放行", async () => {
+    const store = useEditorSessionStore.getState();
+    let actionExecuted = false;
+    let discardAttempts = 0;
+
+    store.registerSession({
+      documentKey: "chapter:p2-3-retry",
+      entityType: "chapter",
+      entityId: "p2-3-retry",
+      title: "清理重试的章节",
+      isDirty: true,
+      isSaving: false,
+      save: async () => ({ status: "saved", savedRevision: 1 }),
+      discard: async () => {
+        discardAttempts++;
+        if (discardAttempts === 1) {
+          throw new Error("IndexedDB deletion failed");
+        }
+      },
+    });
+
+    const leavePromise = requestLeave("all", () => {
+      actionExecuted = true;
+    });
+
+    store.chooseDecision("discard");
+    await flushAsync();
+    expect(actionExecuted).toBe(false);
+
+    // 同一弹窗再次放弃：清理成功，放行
+    store.chooseDecision("discard");
+    const allowed = await leavePromise;
+
+    expect(discardAttempts).toBe(2);
+    expect(allowed).toBe(true);
+    expect(actionExecuted).toBe(true);
+  });
+
   test("模拟会话保存被锁定阻断不放行（验收门槛）", async () => {
     const store = useEditorSessionStore.getState();
     let actionExecuted = false;

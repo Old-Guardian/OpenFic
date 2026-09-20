@@ -56,8 +56,14 @@ export function useWritingWorkingCopy({ type, entityId }: UseWritingWorkingCopyO
 
   const discardWorkingCopy = useCallback(async () => {
     isDiscardedRef.current = true;
-    await flushWritingWorkingCopy(type, entityId);
-    await deleteWritingWorkingCopy(type, entityId);
+    try {
+      await flushWritingWorkingCopy(type, entityId);
+      await deleteWritingWorkingCopy(type, entityId);
+    } catch (error) {
+      // 清理失败：解除丢弃标记，避免失败后永久禁止后续草稿写入
+      isDiscardedRef.current = false;
+      throw error;
+    }
   }, [entityId, type]);
 
   return {

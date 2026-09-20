@@ -2468,6 +2468,7 @@
     "discard": "放弃修改",
     "cancel": "取消",
     "saving": "正在保存...",
-    "saveFailed": "保存未完成，已取消离开操作"
+    "saveFailed": "保存未完成，已取消离开操作",
+    "discardFailed": "未保存草稿清理失败，已取消离开操作"
   }
 }

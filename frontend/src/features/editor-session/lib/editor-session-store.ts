@@ -233,12 +233,22 @@ export async function requestLeave(
 
       if (decision === "discard") {
         store.setDialogProcessing(true, null);
+        let failureReason: string | null = null;
         for (const doc of dirtyDocuments) {
           try {
             await doc.discard?.();
           } catch (error) {
             console.error("Failed to discard editor session changes:", doc.documentKey, error);
+            failureReason =
+              error instanceof Error ? error.message : i18n.t("editorSession.discardFailed");
+            break;
           }
+        }
+
+        // 清理失败不能宣称放弃完成：保留弹窗，让用户重试或取消
+        if (failureReason !== null) {
+          store.setDialogProcessing(false, failureReason);
+          continue;
         }
 
         store.closeConfirmDialog();

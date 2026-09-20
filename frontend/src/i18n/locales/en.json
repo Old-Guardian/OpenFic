@@ -2455,6 +2455,7 @@
     "discard": "Discard Changes",
     "cancel": "Cancel",
     "saving": "Saving...",
-    "saveFailed": "Failed to save changes. Operation cancelled."
+    "saveFailed": "Failed to save changes. Operation cancelled.",
+    "discardFailed": "Failed to clear the unsaved draft. Operation cancelled."
   }
 }
