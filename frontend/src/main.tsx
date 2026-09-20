@@ -16,6 +16,7 @@ import { ErrorBoundary } from "react-error-boundary";
 import { createBrowserRouter, RouterProvider } from "react-router";
 import {
   EditorLeaveConfirmDialog,
+  useDesktopCloseHandler,
   useEditorRouteBlocker,
   useGlobalBeforeUnload,
 } from "./features/editor-session";
@@ -214,6 +215,7 @@ function RootRouteLayout() {
 
   useEditorRouteBlocker();
   useGlobalBeforeUnload();
+  useDesktopCloseHandler();
 
   return (
     <>

@@ -57,6 +57,18 @@ window.addEventListener(
   { capture: true },
 );
 
+const closeRequestListeners = new Set<() => void>();
+
+ipcRenderer.on("openfic:request-close", () => {
+  for (const listener of closeRequestListeners) {
+    try {
+      listener();
+    } catch {
+      // ignore listener errors
+    }
+  }
+});
+
 contextBridge.exposeInMainWorld("openficDesktopHost", {
   publishAppearance: (payload: unknown): void => {
     ipcRenderer.sendToHost("openfic:appearance", payload);
@@ -66,5 +78,14 @@ contextBridge.exposeInMainWorld("openficDesktopHost", {
   },
   publishSocketDiagnostic: (payload: unknown): void => {
     ipcRenderer.sendToHost("openfic:socket-diagnostic", payload);
+  },
+  onRequestClose: (callback: () => void): (() => void) => {
+    closeRequestListeners.add(callback);
+    return () => {
+      closeRequestListeners.delete(callback);
+    };
+  },
+  respondCloseDecision: (payload: unknown): void => {
+    ipcRenderer.sendToHost("openfic:close-decision", payload);
   },
 });

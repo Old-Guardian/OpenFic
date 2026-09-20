@@ -1,5 +1,6 @@
 import type { DesktopConfig } from "../shared/config";
 import type {
+  ConfirmCloseRequest,
   DataInfo,
   DataProgressEvent,
   DeleteInstanceResult,
@@ -71,6 +72,8 @@ declare global {
       onDataProgress: (handler: (event: DataProgressEvent) => void) => () => void;
       onStartupProgress: (handler: (event: StartupProgressEvent) => void) => () => void;
       onUpdateState: (handler: (state: UpdateState) => void) => () => void;
+      onRequestClose: (handler: () => void) => () => void;
+      confirmClose: (request: ConfirmCloseRequest) => Promise<void>;
     };
   }
 }

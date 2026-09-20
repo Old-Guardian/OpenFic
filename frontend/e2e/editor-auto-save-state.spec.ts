@@ -1177,5 +1177,334 @@ test.describe("世界书与角色接入与离开保护 (T7: 1500ms调度、移�
   });
 });
 
+test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认通道及退出顺序)", () => {
+  test.beforeEach(() => {
+    _resetEditorSessionStoreForTest();
+    (globalThis as any).window = globalThis;
+  });
+
+  test.afterEach(() => {
+    delete (globalThis as any).openficDesktopHost;
+  });
+
+  test("无修改时收到桌面端退出请求：直接确认 ({ confirmed: true })，不弹窗且不阻塞", async () => {
+    let capturedDecision: { confirmed: boolean; reason?: string } | null = null;
+    let requestHandler: (() => Promise<void>) | null = null;
+
+    // 模拟 openficDesktopHost 环境
+    window.openficDesktopHost = {
+      publishAppearance: () => {},
+      publishLanguage: () => {},
+      publishSocketDiagnostic: () => {},
+      onRequestClose: (handler: () => Promise<void>) => {
+        requestHandler = handler;
+        return () => {
+          requestHandler = null;
+        };
+      },
+      respondCloseDecision: (decision) => {
+        capturedDecision = decision;
+      },
+    };
+
+    // 注册桌面退出监听
+    const unsubscribe = window.openficDesktopHost.onRequestClose!(async () => {
+      const confirmed = await requestLeave("all", () => {});
+      window.openficDesktopHost?.respondCloseDecision?.({
+        confirmed,
+        reason: confirmed ? undefined : "cancelled_or_failed",
+      });
+    });
+
+    // 触发桌面关闭请求
+    expect(requestHandler).not.toBeNull();
+    await requestHandler!();
+
+    // 验证：无修改时立即确认，弹窗未打开
+    expect(capturedDecision).toEqual({ confirmed: true, reason: undefined });
+    expect(useEditorSessionStore.getState().dialogState).toBeNull();
+
+    unsubscribe();
+    delete window.openficDesktopHost;
+  });
+
+  test("有修改时收到桌面端退出请求：用户选择取消则返回 ({ confirmed: false })，窗口与后端保持运行", async () => {
+    const store = useEditorSessionStore.getState();
+    store.registerSession({
+      documentKey: "chapter:ch-1",
+      entityType: "chapter",
+      entityId: "ch-1",
+      title: "第一章",
+      isDirty: true,
+      isSaving: false,
+      save: async () => ({ status: "saved", savedRevision: 1 }),
+    });
+
+    let capturedDecision: { confirmed: boolean; reason?: string } | null = null;
+    let requestHandler: (() => Promise<void>) | null = null;
+
+    window.openficDesktopHost = {
+      publishAppearance: () => {},
+      publishLanguage: () => {},
+      publishSocketDiagnostic: () => {},
+      onRequestClose: (handler: () => Promise<void>) => {
+        requestHandler = handler;
+        return () => {
+          requestHandler = null;
+        };
+      },
+      respondCloseDecision: (decision) => {
+        capturedDecision = decision;
+      },
+    };
+
+    window.openficDesktopHost.onRequestClose!(async () => {
+      const confirmed = await requestLeave("all", () => {});
+      window.openficDesktopHost?.respondCloseDecision?.({
+        confirmed,
+        reason: confirmed ? undefined : "cancelled_or_failed",
+      });
+    });
+
+    // 触发桌面关闭请求（异步等待确认）
+    const closePromise = requestHandler!();
+
+    // 验证弹窗已唤起，包含脏章节
+    const dialogState = useEditorSessionStore.getState().dialogState;
+    expect(dialogState).not.toBeNull();
+    expect(dialogState?.isOpen).toBe(true);
+    expect(dialogState?.documents.some((d) => d.documentKey === "chapter:ch-1")).toBe(true);
+
+    // 用户选择取消
+    store.chooseDecision("cancel");
+    await closePromise;
+
+    // 验证：返回 confirmed: false，会话依然保持 dirty
+    expect(capturedDecision).toEqual({ confirmed: false, reason: "cancelled_or_failed" });
+    expect(store.getDirtySessions().length).toBe(1);
+
+    delete window.openficDesktopHost;
+  });
+
+  test("有修改时收到桌面端退出请求：用户选择保存并离开，保存成功后返回 ({ confirmed: true })，保存早于确认", async () => {
+    let savedOrder: string[] = [];
+    const store = useEditorSessionStore.getState();
+    store.registerSession({
+      documentKey: "chapter:ch-1",
+      entityType: "chapter",
+      entityId: "ch-1",
+      title: "第一章",
+      isDirty: true,
+      isSaving: false,
+      save: async () => {
+        savedOrder.push("document-saved");
+        return { status: "saved", savedRevision: 1 };
+      },
+    });
+
+    let capturedDecision: { confirmed: boolean; reason?: string } | null = null;
+    let requestHandler: (() => Promise<void>) | null = null;
+
+    window.openficDesktopHost = {
+      publishAppearance: () => {},
+      publishLanguage: () => {},
+      publishSocketDiagnostic: () => {},
+      onRequestClose: (handler: () => Promise<void>) => {
+        requestHandler = handler;
+        return () => {
+          requestHandler = null;
+        };
+      },
+      respondCloseDecision: (decision) => {
+        savedOrder.push("close-confirmed");
+        capturedDecision = decision;
+      },
+    };
+
+    window.openficDesktopHost.onRequestClose!(async () => {
+      const confirmed = await requestLeave("all", () => {});
+      window.openficDesktopHost?.respondCloseDecision?.({
+        confirmed,
+        reason: confirmed ? undefined : "cancelled_or_failed",
+      });
+    });
+
+    const closePromise = requestHandler!();
+
+    // 用户选择保存并离开
+    store.chooseDecision("save");
+    await closePromise;
+
+    // 核心断言：文档保存必须严格早于桌面退出确认
+    expect(savedOrder).toEqual(["document-saved", "close-confirmed"]);
+    expect(capturedDecision).toEqual({ confirmed: true, reason: undefined });
+
+    delete window.openficDesktopHost;
+  });
+
+  test("保存失败时弹窗报错并返回 ({ confirmed: false })，不静默放行退出", async () => {
+    const store = useEditorSessionStore.getState();
+    store.registerSession({
+      documentKey: "note:note-1",
+      entityType: "note",
+      entityId: "note-1",
+      title: "重要备忘",
+      isDirty: true,
+      isSaving: false,
+      save: async () => ({ status: "failed", error: new Error("网络断开，写入数据库超时") }),
+    });
+
+    let capturedDecision: { confirmed: boolean; reason?: string } | null = null;
+    let requestHandler: (() => Promise<void>) | null = null;
+
+    window.openficDesktopHost = {
+      publishAppearance: () => {},
+      publishLanguage: () => {},
+      publishSocketDiagnostic: () => {},
+      onRequestClose: (handler: () => Promise<void>) => {
+        requestHandler = handler;
+        return () => {
+          requestHandler = null;
+        };
+      },
+      respondCloseDecision: (decision) => {
+        capturedDecision = decision;
+      },
+    };
+
+    window.openficDesktopHost.onRequestClose!(async () => {
+      const confirmed = await requestLeave("all", () => {});
+      window.openficDesktopHost?.respondCloseDecision?.({
+        confirmed,
+        reason: confirmed ? undefined : "cancelled_or_failed",
+      });
+    });
+
+    const closePromise = requestHandler!();
+
+    // 用户选择保存
+    store.chooseDecision("save");
+    await closePromise;
+
+    // 核心断言：保存失败不能放行退出，必须返回 false
+    expect(capturedDecision).toEqual({ confirmed: false, reason: "cancelled_or_failed" });
+    // 弹窗中应显示具体失败原因
+    const currentDialog = useEditorSessionStore.getState().dialogState;
+    expect(currentDialog?.errorMessage).toContain("网络断开，写入数据库超时");
+
+    delete window.openficDesktopHost;
+  });
+
+  test("四类编辑器（章节、笔记、世界书、角色）未保存修改均受桌面退出通道统一保护", async () => {
+    const store = useEditorSessionStore.getState();
+    const savedKeys: string[] = [];
+
+    store.registerSession({
+      documentKey: "chapter:c-1",
+      entityType: "chapter",
+      entityId: "c-1",
+      title: "第100章 决战",
+      isDirty: true,
+      isSaving: false,
+      save: async () => {
+        savedKeys.push("chapter:c-1");
+        return { status: "saved", savedRevision: 1 };
+      },
+    });
+
+    store.registerSession({
+      documentKey: "note:n-1",
+      entityType: "note",
+      entityId: "n-1",
+      title: "伏笔笔记",
+      isDirty: true,
+      isSaving: false,
+      save: async () => {
+        savedKeys.push("note:n-1");
+        return { status: "saved", savedRevision: 1 };
+      },
+    });
+
+    store.registerSession({
+      documentKey: "world-info:w-1",
+      entityType: "world-info",
+      entityId: "w-1",
+      title: "青云门宗规",
+      isDirty: true,
+      isSaving: false,
+      save: async () => {
+        savedKeys.push("world-info:w-1");
+        return { status: "saved", savedRevision: 1 };
+      },
+    });
+
+    store.registerSession({
+      documentKey: "character:char-1",
+      entityType: "character",
+      entityId: "char-1",
+      title: "掌教真人",
+      isDirty: true,
+      isSaving: false,
+      save: async () => {
+        savedKeys.push("character:char-1");
+        return { status: "saved", savedRevision: 1 };
+      },
+    });
+
+    let capturedDecision: { confirmed: boolean; reason?: string } | null = null;
+    let requestHandler: (() => Promise<void>) | null = null;
+
+    window.openficDesktopHost = {
+      publishAppearance: () => {},
+      publishLanguage: () => {},
+      publishSocketDiagnostic: () => {},
+      onRequestClose: (handler: () => Promise<void>) => {
+        requestHandler = handler;
+        return () => {
+          requestHandler = null;
+        };
+      },
+      respondCloseDecision: (decision) => {
+        capturedDecision = decision;
+      },
+    };
+
+    window.openficDesktopHost.onRequestClose!(async () => {
+      const confirmed = await requestLeave("all", () => {});
+      window.openficDesktopHost?.respondCloseDecision?.({
+        confirmed,
+        reason: confirmed ? undefined : "cancelled_or_failed",
+      });
+    });
+
+    const closePromise = requestHandler!();
+
+    // 验证弹窗列出了所有 4 类受影响文档
+    const dialogState = useEditorSessionStore.getState().dialogState;
+    expect(dialogState?.documents.length).toBe(4);
+    expect(dialogState?.documents.map((d) => d.documentKey)).toEqual([
+      "chapter:c-1",
+      "note:n-1",
+      "world-info:w-1",
+      "character:char-1",
+    ]);
+
+    // 用户选择保存并离开
+    useEditorSessionStore.getState().chooseDecision("save");
+    await closePromise;
+
+    // 验证所有 4 类文档全部依次保存完成，随后退出确认成功
+    expect(savedKeys).toEqual([
+      "chapter:c-1",
+      "note:n-1",
+      "world-info:w-1",
+      "character:char-1",
+    ]);
+    expect(capturedDecision).toEqual({ confirmed: true, reason: undefined });
+
+    delete window.openficDesktopHost;
+  });
+});
+
 
 

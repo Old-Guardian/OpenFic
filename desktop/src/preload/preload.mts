@@ -3,6 +3,7 @@ import {
   IpcChannels,
   type BackupDataRequest,
   type CheckPathOverlapRequest,
+  type ConfirmCloseRequest,
   type DataInfo,
   type DataProgressEvent,
   type DeleteInstanceRequest,
@@ -171,6 +172,13 @@ const desktopApi = {
     ipcRenderer.on(IpcChannels.updateState, listener);
     return () => ipcRenderer.off(IpcChannels.updateState, listener);
   },
+  onRequestClose: (handler: () => void): (() => void) => {
+    const listener = () => handler();
+    ipcRenderer.on(IpcChannels.requestClose, listener);
+    return () => ipcRenderer.off(IpcChannels.requestClose, listener);
+  },
+  confirmClose: (request: ConfirmCloseRequest): Promise<void> =>
+    ipcRenderer.invoke(IpcChannels.confirmClose, request),
 };
 
 contextBridge.exposeInMainWorld("openficDesktop", desktopApi);

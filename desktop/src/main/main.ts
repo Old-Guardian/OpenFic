@@ -16,6 +16,7 @@ import { createStartupProgressTracker, type StartupProgressTracker } from "./sta
 import { IpcChannels } from "../shared/ipc.js";
 import { appendLog, setLogsDir } from "./logging.js";
 import { captureException, captureExceptionImmediate, startErrorTelemetry, syncTelemetryEnabled } from "./telemetry.js";
+import { createCloseCoordinator } from "./close-coordinator.js";
 import type { InitializeAppResult } from "../shared/ipc.js";
 import type { DesktopConfig, DesktopInstance } from "../shared/config.js";
 
@@ -26,7 +27,6 @@ function writeStartupLog(message: string): void {
 let mainWindow: BrowserWindow | null = null;
 let backendHandle: BackendProcessHandle | null = null;
 let activeInstanceId: string | null = null;
-let isQuitting = false;
 let startupAbortController: AbortController | null = null;
 
 writeStartupLog("process start");
@@ -40,7 +40,7 @@ function setBackend(handle: BackendProcessHandle): void {
   backendHandle.process.on("exit", () => {
     const wasActiveHandle = backendHandle === handle;
     if (wasActiveHandle) backendHandle = null;
-    if (!isQuitting && wasActiveHandle) {
+    if (!closeCoordinator.isConfirmed() && wasActiveHandle) {
       dialog.showErrorBox("OpenFic 后端已退出", `后端服务异常退出。日志路径：${handle.logPath}`);
       app.quit();
     }
@@ -74,7 +74,19 @@ function onConfigSaved(config: DesktopConfig): void {
   activeInstanceId = isDevMode() ? DEV_INSTANCE_ID : config.activeInstanceId;
 }
 
+const closeCoordinator = createCloseCoordinator({
+  getWindow: () => mainWindow,
+  isBackendRunning,
+  stopBackend: stopActiveBackend,
+  quitApp: () => app.quit(),
+  log: writeStartupLog,
+});
+
 function attachWindowLifecycle(window: BrowserWindow): void {
+  window.on("close", (event) => {
+    closeCoordinator.handleWindowClose(event);
+  });
+
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = null;
   });
@@ -472,6 +484,7 @@ async function bootstrap(): Promise<void> {
     onConfigSaved,
     isBackendRunning,
     stopActiveBackend,
+    onConfirmClose: (request, sender) => closeCoordinator.handleConfirmClose(request, sender),
   });
 
   writeStartupLog("opening shell window");
@@ -503,16 +516,7 @@ if (!gotLock) {
   });
 
   app.on("before-quit", (event) => {
-    if (isQuitting) return;
-    const handle = backendHandle;
-    if (!handle) {
-      isQuitting = true;
-      return;
-    }
-
-    event.preventDefault();
-    isQuitting = true;
-    void stopBackendProcess(handle).finally(() => app.quit());
+    closeCoordinator.handleBeforeQuit(event);
   });
 
   process.on("exit", () => forceStopBackendProcess(backendHandle));

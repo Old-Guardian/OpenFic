@@ -4,6 +4,7 @@ import {
   IpcChannels,
   type BackupDataRequest,
   type CheckPathOverlapRequest,
+  type ConfirmCloseRequest,
   type DataProgressEvent,
   type DeleteInstanceRequest,
   type DeleteInstanceResult,
@@ -195,6 +196,7 @@ export interface IpcContext {
   onConfigSaved: (config: DesktopConfig) => void;
   isBackendRunning: () => boolean;
   stopActiveBackend: () => Promise<void>;
+  onConfirmClose?: (request: ConfirmCloseRequest, sender: Electron.WebContents) => Promise<void> | void;
 }
 
 function createInstanceId(): string {
@@ -708,6 +710,11 @@ export function registerIpc(context: IpcContext): void {
   });
   ipcMain.handle(IpcChannels.closeWindow, async () => {
     context.shellWindow()?.close();
+  });
+  ipcMain.handle(IpcChannels.confirmClose, async (event, request: ConfirmCloseRequest) => {
+    if (context.onConfirmClose) {
+      await context.onConfirmClose(request, event.sender);
+    }
   });
   ipcMain.handle(IpcChannels.openProjectHome, () => shell.openExternal(PROJECT_HOME_URL));
   ipcMain.handle(IpcChannels.reportBug, () => shell.openExternal(BUG_REPORT_URL));

@@ -25,6 +25,8 @@ export const IpcChannels = {
   reloadWindow: "window:reload",
   toggleDevTools: "window:toggle-dev-tools",
   closeWindow: "window:close",
+  requestClose: "window:request-close",
+  confirmClose: "window:confirm-close",
   getUpdateState: "update:get-state",
   checkForUpdate: "update:check",
   downloadUpdate: "update:download",
@@ -277,4 +279,9 @@ export interface DataProgressEvent {
   phase: DataOperationPhase;
   /** Overall progress of the current phase as a 0..1 fraction when available. */
   progress?: number;
+}
+
+export interface ConfirmCloseRequest {
+  confirmed: boolean;
+  reason?: string;
 }

@@ -150,6 +150,15 @@ function isSocketDiagnosticPayload(value: unknown): value is SocketDiagnosticPay
   );
 }
 
+function isCloseDecisionPayload(value: unknown): value is { confirmed: boolean; reason?: string } {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as { confirmed?: unknown; reason?: unknown };
+  return (
+    typeof candidate.confirmed === "boolean" &&
+    (candidate.reason === undefined || typeof candidate.reason === "string")
+  );
+}
+
 function writeFrontendDiagnostic(message: string): void {
   void window.openficDesktop.logFrontendDiagnostic(message).catch(() => undefined);
 }
@@ -352,6 +361,11 @@ export function App() {
       }
       if (channel === "openfic:menu-shortcut" && isMenuShortcut(payload)) {
         window.dispatchEvent(new CustomEvent("openfic:menu-shortcut", { detail: payload }));
+        return;
+      }
+      if (channel === "openfic:close-decision" && isCloseDecisionPayload(payload)) {
+        void window.openficDesktop.confirmClose(payload);
+        return;
       }
     };
 
@@ -369,6 +383,21 @@ export function App() {
       frontendWebview.removeEventListener("did-finish-load", restoreZoomFactor);
     };
   }, [activeInstanceId, frontendWebview]);
+
+  useEffect(() => {
+    const unsubscribe = window.openficDesktop.onRequestClose(() => {
+      if (shellState !== "frontend" || !frontendWebview) {
+        void window.openficDesktop.confirmClose({ confirmed: true });
+        return;
+      }
+      try {
+        frontendWebview.send("openfic:request-close");
+      } catch {
+        void window.openficDesktop.confirmClose({ confirmed: true });
+      }
+    });
+    return unsubscribe;
+  }, [frontendWebview, shellState]);
 
   useEffect(() => {
     if (!frontendWebview) {
