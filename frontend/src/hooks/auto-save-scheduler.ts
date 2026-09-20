@@ -229,6 +229,11 @@ export class AutoSaveScheduler {
       return { status: "blocked", reason: this.config.blockedReason };
     }
 
+    // 自动保存入口即检查开关：关闭后不得提交新的自动保存；手动/离开保存不受限
+    if (reason === "auto" && !this.config.enabled) {
+      return { status: "unchanged" };
+    }
+
     // 检查是否有未保存修改
     if (
       !this.config.hasChanges ||
@@ -241,7 +246,7 @@ export class AutoSaveScheduler {
     // 取消待执行的自动定时保存
     this.clearTimer();
 
-    const documentKey = this.config.documentKey;
+    const queuedDocumentKey = this.config.documentKey;
 
     // 登记在途状态。等待者必须看到 isSaving=true，即使真正的 save 要等队首完成。
     this.pendingSaveCount++;
@@ -249,13 +254,21 @@ export class AutoSaveScheduler {
 
     // 进入逐文档串行队列。每个 triggerSave 占据独立队列槽位，串行执行各自的 save；
     // 因此多个等待者不会在队首结束后一拥而上，任一时刻至多一个 save 在途 (Rule 3)。
-    const result = await enqueueDocumentSave(documentKey, async () => {
-      // 排队期间状态可能已变：此时才重新检查，保证不提交已失效的快照。
+    const result = await enqueueDocumentSave(queuedDocumentKey, async () => {
+      // 排队期间可能已取消：文档身份变更时不得把旧内容写入新实体。
+      if (this.config.documentKey !== queuedDocumentKey) {
+        return { status: "unchanged" };
+      }
       if (this.isDisposed) {
         return { status: "unchanged" };
       }
       if (this.config.blockedReason) {
         return { status: "blocked", reason: this.config.blockedReason };
+      }
+      // 排队等待期间开关可能被关闭：自动保存不得在等待结束后继续提交新请求。
+      // 已发出的请求允许完成，但此任务此前尚未发出，仍受最新开关约束。
+      if (reason === "auto" && !this.config.enabled) {
+        return { status: "unchanged" };
       }
       if (
         !this.config.hasChanges ||

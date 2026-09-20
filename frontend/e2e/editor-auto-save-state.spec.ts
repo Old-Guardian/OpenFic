@@ -354,6 +354,63 @@ test.describe("编辑器共用保存调度器 (T3: F03, F07, F08, F16)", () => {
     expect(scheduler.getState().isScheduled).toBe(false);
   });
 
+  test("P2.1: 关闭开关阻止已排队的自动保存，手动保存仍可提交", async () => {
+    let resolveFirst!: (result: SaveResult) => void;
+    const firstGate = new Promise<SaveResult>((resolve) => {
+      resolveFirst = resolve;
+    });
+
+    const calls: { reason: SaveReason; revision: number }[] = [];
+    const saveAdapter = async (reason: SaveReason, revision: number): Promise<SaveResult> => {
+      calls.push({ reason, revision });
+      if (calls.length === 1) {
+        return firstGate; // 版本 1 自动保存保持在途
+      }
+      return { status: "saved", savedRevision: revision };
+    };
+
+    const timer = new VirtualTimer();
+    const baseConfig: AutoSaveSchedulerConfig = {
+      documentKey: "chapter:p2-1",
+      enabled: true,
+      delayMs: 2000,
+      dirtyRevision: 1,
+      hasChanges: true,
+      save: saveAdapter,
+      timers: timer.asTimers(),
+    };
+    const scheduler = new AutoSaveScheduler(baseConfig);
+
+    // 版本 1 的自动保存到期，进入在途（慢请求）
+    await timer.advanceTime(2000);
+    expect(calls).toEqual([{ reason: "auto", revision: 1 }]);
+
+    // 请求在途期间继续编辑到版本 2，并推进计时器让第二次自动保存进入排队等待
+    scheduler.updateConfig({ ...baseConfig, dirtyRevision: 2 });
+    await timer.advanceTime(2000);
+    // 第二个请求必须等待队首，尚未发出
+    expect(calls.length).toBe(1);
+
+    // 此时关闭开关
+    scheduler.updateConfig({ ...baseConfig, dirtyRevision: 2, enabled: false });
+
+    // 版本 1 请求完成：排队中的自动保存不得因等待结束而继续提交
+    resolveFirst({ status: "saved", savedRevision: 1 });
+    await flushAsync();
+
+    // 核心断言：只有首个已发出请求，最新修改仍未保存；关闭后没有新请求
+    expect(calls).toEqual([{ reason: "auto", revision: 1 }]);
+    expect(scheduler.getState().lastSavedRevision).toBe(1);
+    expect(scheduler.getState().isScheduled).toBe(false);
+
+    // 对照：手动保存不受开关限制，仍可提交最新版本
+    await scheduler.triggerSave("manual");
+    expect(calls).toEqual([
+      { reason: "auto", revision: 1 },
+      { reason: "manual", revision: 2 },
+    ]);
+  });
+
   test("F16: 设置快速操作与无关重渲染：不出现旧设置响应覆盖新状态，不重复/无限推迟保存", async () => {
     const timer = new VirtualTimer();
     const calls: { reason: SaveReason; revision: number }[] = [];
