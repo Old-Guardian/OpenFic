@@ -940,6 +940,8 @@
     "codeFontFamily": "代码字体",
     "baseFontSize": "基础字号",
     "editorFontSize": "编辑器字号",
+    "editorAutoSave": "自动保存",
+    "editorAutoSaveHint": "自动保存小说章节、笔记、世界书条目和角色条目的修改。关闭后请手动保存；章节和笔记仍保留本地恢复草稿。",
     "editorAutoIndent": "段落自动缩进",
     "editorAutoIndentHint": "换行时，若当前段落以两个全角空格开头，自动为下一段添加相同的前缀。",
     "editorAutoIndentTooltip": "仅对章节编辑器生效",

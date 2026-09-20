@@ -120,6 +120,7 @@ async def test_get_settings_default(client: AsyncClient) -> None:
     assert data["agent_tool_permissions"] == EXPECTED_AGENT_TOOL_PERMISSIONS
     assert data["audit_persist_details"] is False
     assert data["compress_system_prompts"] is False
+    assert data["editor_auto_save"] is True
     assert data["editor_auto_indent"] is True
     assert data["editor_auto_convert_punctuation"] is False
     assert data["editor_auto_pair_symbols"] is False
@@ -706,3 +707,103 @@ async def test_get_settings_does_not_lazy_persist_agent_tool_permissions(
     assert setting is None
     bypass_setting = await setting_repo.get_by_key(session, "agent_bypass_tool_approval")
     assert bypass_setting is None
+
+
+@pytest.mark.asyncio
+async def test_update_settings_editor_auto_save(client: AsyncClient) -> None:
+    """测试更新并持久化 editor_auto_save 设置。"""
+    # 显式更新为 False
+    response = await client.put(
+        "/api/v1/settings",
+        json={"editor_auto_save": False},
+    )
+    assert response.status_code == 200
+    assert response.json()["editor_auto_save"] is False
+
+    # 验证读取持久化值
+    follow_up = await client.get("/api/v1/settings")
+    assert follow_up.status_code == 200
+    assert follow_up.json()["editor_auto_save"] is False
+
+    # 恢复更新为 True
+    restore_response = await client.put(
+        "/api/v1/settings",
+        json={"editor_auto_save": True},
+    )
+    assert restore_response.status_code == 200
+    assert restore_response.json()["editor_auto_save"] is True
+
+    # 验证读取恢复值
+    restore_follow_up = await client.get("/api/v1/settings")
+    assert restore_follow_up.status_code == 200
+    assert restore_follow_up.json()["editor_auto_save"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_settings_editor_auto_save_partial_update(client: AsyncClient) -> None:
+    """测试部分更新时 editor_auto_save 与其他设置互不影响，null/未传不覆盖。"""
+    # 初始设置 editor_auto_save 为 False
+    await client.put(
+        "/api/v1/settings",
+        json={"editor_auto_save": False, "editor_auto_indent": True},
+    )
+
+    # 未传 editor_auto_save，只更新 editor_auto_indent
+    resp1 = await client.put(
+        "/api/v1/settings",
+        json={"editor_auto_indent": False},
+    )
+    assert resp1.status_code == 200
+    assert resp1.json()["editor_auto_save"] is False
+    assert resp1.json()["editor_auto_indent"] is False
+
+    # 传入 null / None 时不覆盖已有 editor_auto_save
+    resp2 = await client.put(
+        "/api/v1/settings",
+        json={"editor_auto_save": None, "editor_auto_indent": True},
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["editor_auto_save"] is False
+    assert resp2.json()["editor_auto_indent"] is True
+
+    # 更新 editor_auto_save 为 True，不传其他字段，不覆盖其他字段
+    resp3 = await client.put(
+        "/api/v1/settings",
+        json={"editor_auto_save": True},
+    )
+    assert resp3.status_code == 200
+    assert resp3.json()["editor_auto_save"] is True
+    assert resp3.json()["editor_auto_indent"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_settings_editor_auto_save_fallback(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """测试数据库中无记录、空值或非法值时 editor_auto_save 回退为默认值 True。"""
+    # 模拟非法值
+    await setting_repo.upsert(session, "editor_auto_save", "invalid_bool_value")
+    await session.commit()
+
+    response = await client.get("/api/v1/settings")
+    assert response.status_code == 200
+    assert response.json()["editor_auto_save"] is True
+
+    # 模拟空字符串
+    await setting_repo.upsert(session, "editor_auto_save", "")
+    await session.commit()
+
+    response_empty = await client.get("/api/v1/settings")
+    assert response_empty.status_code == 200
+    assert response_empty.json()["editor_auto_save"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_settings_editor_auto_save_invalid_type(client: AsyncClient) -> None:
+    """测试更新非布尔值时触发校验失败。"""
+    response = await client.put(
+        "/api/v1/settings",
+        json={"editor_auto_save": "not-a-bool"},
+    )
+    assert response.status_code == 422

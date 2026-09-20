@@ -55,7 +55,12 @@ export function getRuntimeConfig(): RuntimeConfig | null {
  * when that config is unavailable could connect to an unrelated process.
  */
 export function getFallbackBackendBaseUrl(): string | null {
-  if (import.meta.env.DEV || typeof window === "undefined") return null;
+  if (
+    (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.DEV) ||
+    typeof window === "undefined"
+  ) {
+    return null;
+  }
 
   const { protocol, hostname, port } = window.location;
   const isLoopbackHostname =
@@ -70,6 +75,9 @@ export function getFallbackBackendBaseUrl(): string | null {
 }
 
 export function getConfiguredBackendBaseUrl(): string | null {
-  const explicitBackendUrl = import.meta.env.VITE_BACKEND_URL as string | undefined;
+  const explicitBackendUrl =
+    typeof import.meta !== "undefined" && import.meta.env
+      ? (import.meta.env.VITE_BACKEND_URL as string | undefined)
+      : undefined;
   return explicitBackendUrl?.replace(/\/+$/, "") || getFallbackBackendBaseUrl();
 }

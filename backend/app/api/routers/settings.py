@@ -112,6 +112,7 @@ SETTING_KEY_DEFAULT_MODEL = "default_model"
 SETTING_KEY_LIGHT_MODEL = "light_model"
 SETTING_KEY_DEFAULT_EMBEDDING_MODEL = "default_embedding_model"
 SETTING_KEY_AUDIT_PERSIST_DETAILS = AUDIT_DETAILS_PERSISTENCE_SETTING_KEY
+SETTING_KEY_EDITOR_AUTO_SAVE = "editor_auto_save"
 SETTING_KEY_EDITOR_AUTO_INDENT = "editor_auto_indent"
 SETTING_KEY_EDITOR_AUTO_CONVERT_PUNCTUATION = "editor_auto_convert_punctuation"
 SETTING_KEY_EDITOR_AUTO_PAIR_SYMBOLS = "editor_auto_pair_symbols"
@@ -159,6 +160,7 @@ DEFAULT_SETTINGS = {
     SETTING_KEY_AUDIT_PERSIST_DETAILS: "false",
     SETTING_KEY_COMPRESS_SYSTEM_PROMPTS: "false",
     SETTING_KEY_TELEMETRY_ENABLED: "true",
+    SETTING_KEY_EDITOR_AUTO_SAVE: "true",
     SETTING_KEY_EDITOR_AUTO_INDENT: "true",
     SETTING_KEY_EDITOR_AUTO_CONVERT_PUNCTUATION: "false",
     SETTING_KEY_EDITOR_AUTO_PAIR_SYMBOLS: "false",
@@ -443,6 +445,13 @@ code_font_family=settings_dict.get(
             ),
             default=True,
         ),
+        editor_auto_save=_parse_bool_setting(
+            settings_dict.get(
+                SETTING_KEY_EDITOR_AUTO_SAVE,
+                DEFAULT_SETTINGS[SETTING_KEY_EDITOR_AUTO_SAVE],
+            ),
+            default=True,
+        ),
         editor_auto_indent=_parse_bool_setting(
             settings_dict.get(
                 SETTING_KEY_EDITOR_AUTO_INDENT,
@@ -692,6 +701,11 @@ async def update_settings(
     if request.telemetry_enabled is not None:
         settings_to_update[SETTING_KEY_TELEMETRY_ENABLED] = json.dumps(
             request.telemetry_enabled,
+            ensure_ascii=False,
+        )
+    if request.editor_auto_save is not None:
+        settings_to_update[SETTING_KEY_EDITOR_AUTO_SAVE] = json.dumps(
+            request.editor_auto_save,
             ensure_ascii=False,
         )
     if request.editor_auto_indent is not None:

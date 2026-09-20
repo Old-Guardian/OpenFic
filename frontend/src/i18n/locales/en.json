@@ -927,6 +927,8 @@
     "codeFontFamily": "Code Font",
     "baseFontSize": "Base Font Size",
     "editorFontSize": "Editor Font Size",
+    "editorAutoSave": "Auto-save",
+    "editorAutoSaveHint": "Automatically save changes to novel chapters, notes, world info entries, and character profiles. When disabled, save manually; local recovery drafts for chapters and notes are still preserved.",
     "editorAutoIndent": "Auto-indent paragraphs",
     "editorAutoIndentHint": "When breaking a line, if the current paragraph starts with two full-width spaces, automatically add the same prefix to the next paragraph.",
     "editorAutoIndentTooltip": "Applies to the chapter editor only.",

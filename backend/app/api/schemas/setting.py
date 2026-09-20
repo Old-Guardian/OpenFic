@@ -138,6 +138,10 @@ class SettingsResponse(BaseModel):
         default=True,
         description="是否启用 PostHog 错误遥测",
     )
+    editor_auto_save: bool = Field(
+        default=True,
+        description="是否自动保存小说章节、笔记、世界书条目和角色条目的修改",
+    )
     editor_auto_indent: bool = Field(
         default=True,
         description="换行时若当前段落以两个全角空格开头，是否为下一段自动添加相同前缀",
@@ -244,6 +248,10 @@ class SettingsUpdateRequest(BaseModel):
     telemetry_enabled: bool | None = Field(
         default=None,
         description="是否启用 PostHog 错误遥测",
+    )
+    editor_auto_save: bool | None = Field(
+        default=None,
+        description="是否自动保存小说章节、笔记、世界书条目和角色条目的修改",
     )
     editor_auto_indent: bool | None = Field(
         default=None,
