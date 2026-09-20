@@ -19,6 +19,8 @@ export interface MarkdownEditorProps {
   content: string;
   onContentChange: (markdown: string) => void;
   onSave: () => void;
+  /** 标题失焦时的隐式保存，独立于显式保存；调用方据此受自动保存开关控制 */
+  onTitleBlurSave?: () => void;
   isSaving?: boolean;
   hasChanges?: boolean;
   isLocked?: boolean;
@@ -74,6 +76,7 @@ export function MarkdownEditor({
   content,
   onContentChange,
   onSave,
+  onTitleBlurSave,
   isSaving = false,
   hasChanges = false,
   isLocked = false,
@@ -290,9 +293,9 @@ export function MarkdownEditor({
 
   const handleTitleBlur = useCallback(() => {
     if (hasChanges && !isLocked) {
-      onSave();
+      onTitleBlurSave?.();
     }
-  }, [hasChanges, isLocked, onSave]);
+  }, [hasChanges, isLocked, onTitleBlurSave]);
 
   const saveStatus = isSaving ? "saving" : hasChanges ? "unsaved" : "saved";
   const wordCount = externalWordCount ?? editor?.storage.characterCount?.characters() ?? 0;

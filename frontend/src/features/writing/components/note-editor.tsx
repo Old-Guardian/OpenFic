@@ -7,7 +7,7 @@ import { MarkdownEditor, Spinner } from "@/components";
 import { toast } from "@/components/toast";
 import { useEditorSession } from "@/features/editor-session";
 import { useEditorAutoSaveSetting } from "@/features/settings/hooks/use-editor-auto-save-setting";
-import { useAutoSave, type SaveReason, type SaveResult } from "@/hooks/use-auto-save";
+import { useAutoSave, saveOnTitleBlur, type SaveReason, type SaveResult } from "@/hooks/use-auto-save";
 import { fetchNote } from "@/lib/api-client";
 import {
   getEditorContentLimit,
@@ -349,6 +349,7 @@ function NoteEditorContent({
       content={editorContent}
       onContentChange={handleContentChange}
       onSave={() => void autoSave.save("manual")}
+      onTitleBlurSave={() => saveOnTitleBlur(autoSaveEnabled, autoSave.save)}
       isSaving={combinedIsSaving}
       hasChanges={hasChanges}
       isLocked={isAgentLocked}

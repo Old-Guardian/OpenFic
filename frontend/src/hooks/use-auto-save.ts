@@ -10,6 +10,21 @@ import {
 
 export type { SaveReason, SaveResult };
 
+/**
+ * 标题失焦的隐式保存入口。
+ *
+ * 标题失焦属于自动保存路径，必须受自动保存开关约束；显式手动保存（按钮、Ctrl/Cmd+S）
+ * 才允许绕过开关。共用编辑器的 onTitleBlurSave 统一通过此函数提交，避免各处重复判断。
+ */
+export function saveOnTitleBlur(
+  isAutoSaveEnabled: boolean,
+  save: (reason?: SaveReason) => Promise<SaveResult>,
+): void {
+  if (isAutoSaveEnabled) {
+    void save("auto");
+  }
+}
+
 export interface UseAutoSaveOptions {
   /** 文档全局唯一 Key，推荐形如 "chapter:123"、"character:456" */
   documentKey: string;

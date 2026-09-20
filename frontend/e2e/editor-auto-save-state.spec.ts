@@ -10,6 +10,7 @@ import {
   type SaveResult,
   type TimerFunctions,
 } from "../src/hooks/auto-save-scheduler";
+import { saveOnTitleBlur } from "../src/hooks/use-auto-save";
 import {
   _resetEditorSessionStoreForTest,
   requestLeave,
@@ -1506,5 +1507,67 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
   });
 });
 
+test.describe("P1.1: 关闭自动保存后标题失焦不得隐式保存", () => {
+  test.beforeEach(() => {
+    _resetGlobalInFlightMapForTest();
+  });
+
+  test("共用编辑器失焦入口在开关关闭时不提交，开启时才以 auto 原因提交", async () => {
+    const calls: { reason: SaveReason; revision: number }[] = [];
+    const save = async (reason: SaveReason = "manual", revision: number) => {
+      calls.push({ reason, revision });
+      return { status: "saved", savedRevision: revision } as SaveResult;
+    };
+
+    // 关闭开关：失焦路径不得产生任何保存请求（修复前此处会记录一次 save）
+    saveOnTitleBlur(false, (reason) => save(reason, 1));
+    await flushAsync();
+    expect(calls).toEqual([]);
+
+    // 手动保存不受开关限制，仍是用户显式操作（对照：不能被一并禁掉）
+    await save("manual", 1);
+    expect(calls).toEqual([{ reason: "manual", revision: 1 }]);
+
+    // 开启开关后，失焦以 auto 原因提交，走自动保存路径而非手动路径
+    calls.length = 0;
+    saveOnTitleBlur(true, (reason) => save(reason, 2));
+    await flushAsync();
+    expect(calls).toEqual([{ reason: "auto", revision: 2 }]);
+  });
+
+  test("开关关闭的调度器不接受 reason=auto 的失焦触发，开启后才提交", async () => {
+    const timer = new VirtualTimer();
+    const calls: { reason: SaveReason; revision: number }[] = [];
+    const save = async (reason: SaveReason, revision: number): Promise<SaveResult> => {
+      calls.push({ reason, revision });
+      return { status: "saved", savedRevision: revision };
+    };
+
+    let enabled = false;
+    const baseConfig: AutoSaveSchedulerConfig = {
+      documentKey: "note:p1-1",
+      enabled,
+      delayMs: 3000,
+      dirtyRevision: 1,
+      hasChanges: true,
+      save,
+      timers: timer.asTimers(),
+    };
+    const scheduler = new AutoSaveScheduler(baseConfig);
+
+    // 开关关闭时标题失焦：即便调用方漏判，调度器也不得自动保存
+    saveOnTitleBlur(false, (reason) => scheduler.triggerSave(reason));
+    await flushAsync();
+    expect(calls).toEqual([]);
+    expect(scheduler.getState().isScheduled).toBe(false);
+
+    // 开启开关后，同样的失焦路径正常提交
+    enabled = true;
+    scheduler.updateConfig({ ...baseConfig, enabled });
+    saveOnTitleBlur(enabled, (reason) => scheduler.triggerSave(reason));
+    await flushAsync();
+    expect(calls).toEqual([{ reason: "auto", revision: 1 }]);
+  });
+});
 
 
