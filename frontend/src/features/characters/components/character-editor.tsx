@@ -1,9 +1,9 @@
-import { Flex, Text } from "@radix-ui/themes";
+import { Box, Flex, Skeleton, Text } from "@radix-ui/themes";
 import type { Editor } from "@tiptap/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { AliasInput, MarkdownEditor, Spinner } from "@/components";
+import { AliasInput, MarkdownEditor } from "@/components";
 import { toast } from "@/components/toast";
 import { useEditorSession } from "@/features/editor-session";
 import { useEditorAutoSaveSetting } from "@/features/settings/hooks/use-editor-auto-save-setting";
@@ -244,13 +244,30 @@ export function CharacterEditor({
 
   if (isLoading) {
     return (
-      <Flex
-        className="characters-editor-empty"
-        align="center"
-        justify="center"
-      >
-        <Spinner size={18} />
-      </Flex>
+      <Box className="characters-editor-loading">
+        <Flex
+          className="characters-editor-loading-content"
+          direction="column"
+          gap="4"
+        >
+          <Skeleton
+            width="100%"
+            height="36px"
+          />
+          <Skeleton
+            width="100%"
+            height="36px"
+          />
+          <Skeleton
+            width="100%"
+            height="200px"
+          />
+          <Skeleton
+            width="100%"
+            height="80px"
+          />
+        </Flex>
+      </Box>
     );
   }
 
