@@ -1,8 +1,24 @@
 import { Theme } from "@radix-ui/themes";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { lazy, StrictMode, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  lazy,
+  StrictMode,
+  Suspense,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { ErrorBoundary } from "react-error-boundary";
-import { BrowserRouter, Routes, Route } from "react-router";
+import { createBrowserRouter, RouterProvider } from "react-router";
+import {
+  EditorLeaveConfirmDialog,
+  useEditorRouteBlocker,
+  useGlobalBeforeUnload,
+} from "./features/editor-session";
 
 import App from "./App.tsx";
 import { AppCrashFallback, GlobalLoading, toast } from "./components";
@@ -178,6 +194,79 @@ const DashboardPage = lazy(() =>
   })),
 );
 
+interface AppLayoutContextValue {
+  appearance: "light" | "dark";
+  version: string;
+  themeMode: ThemeMode;
+  onThemeModeChange: (themeMode: ThemeMode) => void;
+  onThemeSettingsChange: (settings: ThemeSettings) => void;
+  onThemePreviewChange: (settings: ThemeSettings) => void;
+  onToggleTheme: () => void;
+}
+
+const AppLayoutContext = createContext<AppLayoutContextValue | null>(null);
+
+function RootRouteLayout() {
+  const layoutProps = useContext(AppLayoutContext);
+  if (!layoutProps) {
+    throw new Error("RootRouteLayout must be rendered within AppLayoutContext.Provider");
+  }
+
+  useEditorRouteBlocker();
+  useGlobalBeforeUnload();
+
+  return (
+    <>
+      <AppLayout
+        appearance={layoutProps.appearance}
+        version={layoutProps.version}
+        themeMode={layoutProps.themeMode}
+        onThemeModeChange={layoutProps.onThemeModeChange}
+        onThemeSettingsChange={layoutProps.onThemeSettingsChange}
+        onThemePreviewChange={layoutProps.onThemePreviewChange}
+        onToggleTheme={layoutProps.onToggleTheme}
+      />
+      <EditorLeaveConfirmDialog />
+    </>
+  );
+}
+
+export const appRouter = createBrowserRouter([
+  {
+    element: <RootRouteLayout />,
+    children: [
+      {
+        path: "/",
+        element: <App />,
+      },
+      {
+        path: "/projects/:projectId",
+        element: <WritingPage />,
+      },
+      {
+        path: "/world-info",
+        element: <WorldInfoPage />,
+      },
+      {
+        path: "/characters",
+        element: <CharactersPage />,
+      },
+      {
+        path: "/prompt-chains",
+        element: <PromptChainsPage />,
+      },
+      {
+        path: "/dashboard",
+        element: (
+          <Suspense fallback={null}>
+            <DashboardPage />
+          </Suspense>
+        ),
+      },
+    ],
+  },
+]);
+
 function AppContent({
   appearance,
   version,
@@ -195,53 +284,31 @@ function AppContent({
   previewThemeSettings: (settings: ThemeSettings) => void;
   toggleTheme: () => void;
 }) {
+  const contextValue = useMemo<AppLayoutContextValue>(
+    () => ({
+      appearance,
+      version,
+      themeMode,
+      onThemeModeChange: setThemeMode,
+      onThemeSettingsChange: setThemeSettings,
+      onThemePreviewChange: previewThemeSettings,
+      onToggleTheme: toggleTheme,
+    }),
+    [
+      appearance,
+      previewThemeSettings,
+      setThemeMode,
+      setThemeSettings,
+      themeMode,
+      toggleTheme,
+      version,
+    ],
+  );
+
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route
-          element={
-            <AppLayout
-              appearance={appearance}
-              version={version}
-              themeMode={themeMode}
-              onThemeModeChange={setThemeMode}
-              onThemeSettingsChange={setThemeSettings}
-              onThemePreviewChange={previewThemeSettings}
-              onToggleTheme={toggleTheme}
-            />
-          }
-        >
-          <Route
-            path="/"
-            element={<App />}
-          />
-          <Route
-            path="/projects/:projectId"
-            element={<WritingPage />}
-          />
-          <Route
-            path="/world-info"
-            element={<WorldInfoPage />}
-          />
-          <Route
-            path="/characters"
-            element={<CharactersPage />}
-          />
-          <Route
-            path="/prompt-chains"
-            element={<PromptChainsPage />}
-          />
-          <Route
-            path="/dashboard"
-            element={
-              <Suspense fallback={null}>
-                <DashboardPage />
-              </Suspense>
-            }
-          />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <AppLayoutContext.Provider value={contextValue}>
+      <RouterProvider router={appRouter} />
+    </AppLayoutContext.Provider>
   );
 }
 

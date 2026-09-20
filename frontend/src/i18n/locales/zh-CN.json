@@ -2460,5 +2460,14 @@
         "completeTitle": "导入完成"
       }
     }
+  },
+  "editorSession": {
+    "unsavedChangesTitle": "未保存的修改",
+    "unsavedChangesDescription": "以下文档有未保存的修改，请选择离开前的处理方式：",
+    "saveAndLeave": "保存并离开",
+    "discard": "放弃修改",
+    "cancel": "取消",
+    "saving": "正在保存...",
+    "saveFailed": "保存未完成，已取消离开操作"
   }
 }

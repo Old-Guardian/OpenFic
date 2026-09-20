@@ -534,6 +534,17 @@ export async function saveWritingWorkingCopy(
   return record;
 }
 
+export async function flushWritingWorkingCopy(
+  type: WritingWorkingCopyType,
+  entityId: string,
+): Promise<void> {
+  const id = getWritingWorkingCopyId(type, entityId);
+  const pending = writingWorkingCopyOperations.get(id);
+  if (pending) {
+    await pending;
+  }
+}
+
 export async function deleteWritingWorkingCopy(
   type: WritingWorkingCopyType,
   entityId: string,
@@ -541,8 +552,9 @@ export async function deleteWritingWorkingCopy(
   const id = getWritingWorkingCopyId(type, entityId);
   try {
     await enqueueWritingWorkingCopyOperation(id, () => db.writingWorkingCopies.delete(id));
-  } catch {
-    console.error("删除写作草稿失败");
+  } catch (error) {
+    console.error("删除写作草稿失败", error);
+    throw error;
   }
 }
 

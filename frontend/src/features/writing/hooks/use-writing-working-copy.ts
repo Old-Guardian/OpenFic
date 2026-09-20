@@ -1,8 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import {
   deleteWritingWorkingCopy,
   deleteWritingWorkingCopyIfMatches,
+  flushWritingWorkingCopy,
   saveWritingWorkingCopy,
   type WritingWorkingCopyType,
 } from "@/lib/local-db";
@@ -15,6 +16,8 @@ export interface WritingDraft {
 export interface WritingWorkingCopyController {
   persistWorkingCopy: (draft: WritingDraft, baseUpdatedAt: string, updatedAt: Date) => void;
   clearWorkingCopy: (draft: WritingDraft, updatedAt: Date) => Promise<void>;
+  flushWorkingCopy: () => Promise<void>;
+  discardWorkingCopy: () => Promise<void>;
 }
 
 interface UseWritingWorkingCopyOptions {
@@ -23,8 +26,11 @@ interface UseWritingWorkingCopyOptions {
 }
 
 export function useWritingWorkingCopy({ type, entityId }: UseWritingWorkingCopyOptions) {
+  const isDiscardedRef = useRef(false);
+
   const persistWorkingCopy = useCallback(
     (draft: WritingDraft, baseUpdatedAt: string, updatedAt: Date) => {
+      if (isDiscardedRef.current) return;
       void saveWritingWorkingCopy({
         entityId,
         type,
@@ -43,14 +49,21 @@ export function useWritingWorkingCopy({ type, entityId }: UseWritingWorkingCopyO
     [entityId, type],
   );
 
-  const discardWorkingCopy = useCallback(
-    () => deleteWritingWorkingCopy(type, entityId),
+  const flushWorkingCopy = useCallback(
+    () => flushWritingWorkingCopy(type, entityId),
     [entityId, type],
   );
+
+  const discardWorkingCopy = useCallback(async () => {
+    isDiscardedRef.current = true;
+    await flushWritingWorkingCopy(type, entityId);
+    await deleteWritingWorkingCopy(type, entityId);
+  }, [entityId, type]);
 
   return {
     persistWorkingCopy,
     clearWorkingCopy,
+    flushWorkingCopy,
     discardWorkingCopy,
   };
 }
