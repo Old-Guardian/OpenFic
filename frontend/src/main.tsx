@@ -215,7 +215,6 @@ function RootRouteLayout() {
 
   useEditorRouteBlocker();
   useGlobalBeforeUnload();
-  useDesktopCloseHandler();
 
   return (
     <>
@@ -228,7 +227,6 @@ function RootRouteLayout() {
         onThemePreviewChange={layoutProps.onThemePreviewChange}
         onToggleTheme={layoutProps.onToggleTheme}
       />
-      <EditorLeaveConfirmDialog />
     </>
   );
 }
@@ -328,6 +326,10 @@ function Root() {
   const hasLoadedPreferencesRef = useRef(false);
   const themeSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const themePreviewFrameRef = useRef<number | null>(null);
+
+  // 关闭请求监听与确认弹窗挂在应用根组件，覆盖初始化加载/错误、登录与主页面全部状态。
+  // 这些页面不渲染 RootRouteLayout，若挂在路由布局上会没有关闭请求响应入口。
+  useDesktopCloseHandler();
 
   const cancelThemePreview = useCallback(() => {
     if (themePreviewFrameRef.current === null) return;
@@ -604,6 +606,7 @@ function Root() {
             )}
           </Theme>
           {isReady && !requiresAuthentication ? <Toaster appearance={appearance} /> : null}
+          <EditorLeaveConfirmDialog />
         </>
       </QueryClientProvider>
     </StrictMode>

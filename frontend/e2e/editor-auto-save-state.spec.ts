@@ -1,4 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { expect, test } from "@playwright/test";
+
+const e2eDir = path.dirname(fileURLToPath(import.meta.url));
 
 import { transformSettings } from "../src/features/settings/lib/settings-api";
 import type { SettingsResponse } from "../src/features/settings/lib/settings.types";
@@ -13,6 +19,7 @@ import {
 import { saveOnTitleBlur } from "../src/hooks/use-auto-save";
 import {
   _resetEditorSessionStoreForTest,
+  handleDesktopCloseRequest,
   requestLeave,
   useEditorSessionStore,
   type EditorSessionRegistration,
@@ -1806,6 +1813,91 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
     // 验证：返回 confirmed: false，会话依然保持 dirty
     expect(capturedDecision).toEqual({ confirmed: false, reason: "cancelled_or_failed" });
     expect(store.getDirtySessions().length).toBe(1);
+
+    delete window.openficDesktopHost;
+  });
+
+  test("P2.4: 关闭处理器与确认弹窗挂载在应用根组件，覆盖登录/初始化状态", () => {
+    const mainSource = fs.readFileSync(path.resolve(e2eDir, "../src/main.tsx"), "utf-8");
+
+    const rootStart = mainSource.indexOf("function Root()");
+    const rootEnd = mainSource.indexOf("registerSW()", rootStart);
+    expect(rootStart).toBeGreaterThan(-1);
+    expect(rootEnd).toBeGreaterThan(rootStart);
+    const rootSource = mainSource.slice(rootStart, rootEnd);
+
+    // 应用根组件必须挂载关闭监听与确认弹窗
+    expect(rootSource).toContain("useDesktopCloseHandler()");
+    expect(rootSource).toContain("<EditorLeaveConfirmDialog />");
+
+    // 路由布局在登录页/初始化错误页不渲染，不得作为唯一挂载点
+    const layoutStart = mainSource.indexOf("function RootRouteLayout()");
+    const layoutEnd = mainSource.indexOf("export const appRouter", layoutStart);
+    expect(layoutStart).toBeGreaterThan(-1);
+    const layoutSource = mainSource.slice(layoutStart, layoutEnd);
+    expect(layoutSource).not.toContain("useDesktopCloseHandler()");
+    expect(layoutSource).not.toContain("<EditorLeaveConfirmDialog />");
+
+    // Root 在 isReady 之前也要渲染关闭入口（弹窗位于 Theme 内、状态分支之外）
+    expect(rootSource).toContain("<EditorLeaveConfirmDialog />");
+  });
+
+  test("P2.4: 无编辑会话时关闭请求也能被响应（覆盖登录页/初始化错误页）", async () => {
+    // 无会话：模拟登录页、初始化加载/错误页的干净状态
+    let capturedDecision: { confirmed: boolean; reason?: string } | null = null;
+
+    window.openficDesktopHost = {
+      publishAppearance: () => {},
+      publishLanguage: () => {},
+      publishSocketDiagnostic: () => {},
+      respondCloseDecision: (decision) => {
+        capturedDecision = decision;
+      },
+    };
+
+    // 应用层关闭处理器：即使不经过 RootRouteLayout 也必须能响应
+    await handleDesktopCloseRequest();
+
+    expect(capturedDecision).toEqual({ confirmed: true, reason: undefined });
+
+    delete window.openficDesktopHost;
+  });
+
+  test("P2.4: 有未保存会话时关闭请求进入确认流程并反馈取消", async () => {
+    const store = useEditorSessionStore.getState();
+    store.registerSession({
+      documentKey: "note:p2-4",
+      entityType: "note",
+      entityId: "p2-4",
+      title: "未保存笔记",
+      isDirty: true,
+      isSaving: false,
+      save: async () => ({ status: "saved", savedRevision: 1 }),
+    });
+
+    let capturedDecision: { confirmed: boolean; reason?: string } | null = null;
+
+    window.openficDesktopHost = {
+      publishAppearance: () => {},
+      publishLanguage: () => {},
+      publishSocketDiagnostic: () => {},
+      respondCloseDecision: (decision) => {
+        capturedDecision = decision;
+      },
+    };
+
+    const closePromise = handleDesktopCloseRequest();
+    await flushAsync();
+
+    // 弹窗已展开，关闭决策尚未返回
+    expect(capturedDecision).toBeNull();
+    expect(useEditorSessionStore.getState().dialogState?.isOpen).toBe(true);
+
+    // 用户取消
+    useEditorSessionStore.getState().chooseDecision("cancel");
+    await closePromise;
+
+    expect(capturedDecision).toEqual({ confirmed: false, reason: "cancelled_or_failed" });
 
     delete window.openficDesktopHost;
   });
