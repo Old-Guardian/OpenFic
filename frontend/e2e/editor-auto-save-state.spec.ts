@@ -396,6 +396,82 @@ test.describe("编辑器共用保存调度器 (T3: F03, F07, F08, F16)", () => {
     expect(calls[0]).toEqual({ reason: "auto", revision: 1 });
   });
 
+  test("P1.2: 多个等待中的保存严格串行，任一时刻在途至多 1，最终写入最新版本", async () => {
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    let serverContent = 0;
+    const calls: { reason: SaveReason; revision: number }[] = [];
+
+    let resolveFirst!: (result: SaveResult) => void;
+    const firstGate = new Promise<SaveResult>((resolve) => {
+      resolveFirst = resolve;
+    });
+
+    const saveAdapter = async (reason: SaveReason, revision: number): Promise<SaveResult> => {
+      concurrent++;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      calls.push({ reason, revision });
+      try {
+        if (calls.length === 1) {
+          await firstGate; // 版本 1 的慢请求保持在途
+        } else {
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        // 模拟服务端最终内容：谁最后写入谁定稿，旧请求迟到会覆盖新内容
+        serverContent = revision;
+        return { status: "saved", savedRevision: revision };
+      } finally {
+        concurrent--;
+      }
+    };
+
+    const scheduler = new AutoSaveScheduler({
+      documentKey: "chapter:p1-2",
+      enabled: true,
+      delayMs: 1000,
+      dirtyRevision: 1,
+      hasChanges: true,
+      save: saveAdapter,
+    });
+
+    // 版本 1 的慢保存已在途
+    const first = scheduler.triggerSave("manual");
+    expect(calls).toEqual([{ reason: "manual", revision: 1 }]);
+
+    // 用户在慢请求期间继续编辑到版本 2
+    scheduler.updateConfig({
+      documentKey: "chapter:p1-2",
+      enabled: true,
+      delayMs: 1000,
+      dirtyRevision: 2,
+      hasChanges: true,
+      save: saveAdapter,
+    });
+
+    // 连续两次手动保存：二者都必须等待在途请求，不得并发发出
+    const second = scheduler.triggerSave("manual");
+    const third = scheduler.triggerSave("manual");
+    expect(calls.length).toBe(1);
+
+    // 版本 1 完成：两个等待者应依次执行，而非一拥而上
+    resolveFirst({ status: "saved", savedRevision: 1 });
+    const [firstResult, secondResult, thirdResult] = await Promise.all([first, second, third]);
+
+    expect(firstResult).toEqual({ status: "saved", savedRevision: 1 });
+    // 核心断言 1：任一时刻同一文档在途请求数不超过 1
+    expect(maxConcurrent).toBe(1);
+    // 核心断言 2：仅第二个等待者提交最新版本，第三个发现无新修改不再重复写入
+    expect(calls).toEqual([
+      { reason: "manual", revision: 1 },
+      { reason: "manual", revision: 2 },
+    ]);
+    expect(secondResult).toEqual({ status: "saved", savedRevision: 2 });
+    expect(thirdResult).toEqual({ status: "unchanged" });
+    // 核心断言 3：最终服务端内容为最新版本，未被迟到请求覆盖
+    expect(serverContent).toBe(2);
+    expect(scheduler.getState().lastSavedRevision).toBe(2);
+  });
+
   test("锁定拦截与清理语义：锁定期间不调度，卸载清理不隐式正式保存", async () => {
     const timer = new VirtualTimer();
     const calls: { reason: SaveReason; revision: number }[] = [];

@@ -49,15 +49,43 @@ const defaultTimers: TimerFunctions = {
   now: () => Date.now(),
 };
 
-/** 全局按 documentKey 串行化在途保存 Promise */
-const globalInFlightMap = new Map<string, Promise<SaveResult>>();
+/** 全局逐文档串行队列的队尾 Promise（永不 reject），保证同一 documentKey 的保存严格排队 */
+const documentSaveQueues = new Map<string, Promise<void>>();
+
+/**
+ * 将保存任务排入该文档的串行队列。
+ *
+ * 无人在途/排队时立即执行，保持调用方的同步启动语义；已有队列时串接在队尾，
+ * 使任一时刻至多一个 save 在途。队尾自身吞掉异常，避免失败请求卡死后续任务。
+ */
+function enqueueDocumentSave(
+  documentKey: string,
+  task: () => Promise<SaveResult>,
+): Promise<SaveResult> {
+  const previous = documentSaveQueues.get(documentKey);
+  const run = previous ? previous.then(task, task) : task();
+
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  documentSaveQueues.set(documentKey, tail);
+  void tail.then(() => {
+    if (documentSaveQueues.get(documentKey) === tail) {
+      documentSaveQueues.delete(documentKey);
+    }
+  });
+
+  return run;
+}
 
 export class AutoSaveScheduler {
   private config: AutoSaveSchedulerConfig;
   private timers: TimerFunctions;
   private timerId: any = null;
   private lastSavedRevision: number | null = null;
-  private isSaving: boolean = false;
+  /** 本实例尚未完成的保存数（含排队等待者），任一大于 0 即对外视为保存中 */
+  private pendingSaveCount: number = 0;
   private isDisposed: boolean = false;
 
   constructor(config: AutoSaveSchedulerConfig) {
@@ -74,7 +102,7 @@ export class AutoSaveScheduler {
 
   public getState(): AutoSaveSchedulerState {
     return {
-      isSaving: this.isSaving,
+      isSaving: this.pendingSaveCount > 0,
       lastSavedRevision: this.lastSavedRevision,
       isScheduled: this.timerId !== null,
     };
@@ -215,13 +243,14 @@ export class AutoSaveScheduler {
 
     const documentKey = this.config.documentKey;
 
-    // 检查该文档是否已有在途保存请求 (Rule 3)
-    const existingInFlight = globalInFlightMap.get(documentKey);
-    if (existingInFlight) {
-      // 等待在途请求完成
-      await existingInFlight;
+    // 登记在途状态。等待者必须看到 isSaving=true，即使真正的 save 要等队首完成。
+    this.pendingSaveCount++;
+    this.notifyStateChange();
 
-      // 再次检查自身状态
+    // 进入逐文档串行队列。每个 triggerSave 占据独立队列槽位，串行执行各自的 save；
+    // 因此多个等待者不会在队首结束后一拥而上，任一时刻至多一个 save 在途 (Rule 3)。
+    const result = await enqueueDocumentSave(documentKey, async () => {
+      // 排队期间状态可能已变：此时才重新检查，保证不提交已失效的快照。
       if (this.isDisposed) {
         return { status: "unchanged" };
       }
@@ -235,46 +264,27 @@ export class AutoSaveScheduler {
       ) {
         return { status: "unchanged" };
       }
-    }
 
-    // 固定当前保存的快照版本
-    const targetRevision = this.config.dirtyRevision;
-
-    this.isSaving = true;
-    this.notifyStateChange();
-
-    const task: { promise: Promise<SaveResult> | null } = { promise: null };
-    const execute = async (): Promise<SaveResult> => {
+      // 固定执行时刻的快照版本
+      const targetRevision = this.config.dirtyRevision;
       try {
-        const result = await this.config.save(reason, targetRevision);
-        if (result.status === "saved") {
+        const saveResult = await this.config.save(reason, targetRevision);
+        if (saveResult.status === "saved") {
           if (
             this.lastSavedRevision === null ||
-            result.savedRevision > this.lastSavedRevision
+            saveResult.savedRevision > this.lastSavedRevision
           ) {
-            this.lastSavedRevision = result.savedRevision;
+            this.lastSavedRevision = saveResult.savedRevision;
           }
         }
-        return result;
+        return saveResult;
       } catch (error) {
         return { status: "failed", error };
-      } finally {
-        if (globalInFlightMap.get(documentKey) === task.promise) {
-          globalInFlightMap.delete(documentKey);
-        }
       }
-    };
+    });
 
-    task.promise = execute();
-    globalInFlightMap.set(documentKey, task.promise);
-
-    let result: SaveResult;
-    try {
-      result = await task.promise;
-    } finally {
-      this.isSaving = false;
-      this.notifyStateChange();
-    }
+    this.pendingSaveCount--;
+    this.notifyStateChange();
 
     // 保存完成后的排队与调度检查 (Rule 5 & Rule 77)
     if (!this.isDisposed) {
@@ -300,7 +310,7 @@ export class AutoSaveScheduler {
   }
 }
 
-/** 仅供测试使用：清理全局在途请求表 */
+/** 仅供测试使用：清理全局逐文档串行队列 */
 export function _resetGlobalInFlightMapForTest() {
-  globalInFlightMap.clear();
+  documentSaveQueues.clear();
 }
