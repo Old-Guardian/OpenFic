@@ -15,7 +15,10 @@ import {
   buildChapterMentionTag,
   buildLineRangeMentionTag,
 } from "@/features/assistant/lib/mention-text";
+import { useEditorSession } from "@/features/editor-session";
+import { useEditorAutoSaveSetting } from "@/features/settings/hooks/use-editor-auto-save-setting";
 import { fetchSettings } from "@/features/settings/lib/settings-api";
+import { useAutoSave, type SaveReason, type SaveResult } from "@/hooks/use-auto-save";
 import { useScrollbarAutoHide } from "@/hooks/use-scrollbar-auto-hide";
 import { fetchChapter } from "@/lib/api-client";
 import type { Chapter } from "@/lib/chapter.types";
@@ -27,7 +30,6 @@ import {
 import { htmlToNewlines, newlinesToHtml } from "@/lib/html-utils";
 import { createToastThrottler } from "@/lib/ui-utils";
 
-import { useAutoSave } from "../hooks/use-auto-save";
 import { useUpdateChapter } from "../hooks/use-chapters";
 import {
   shouldShowWritingEditorLoading,
@@ -137,15 +139,17 @@ function ChapterEditorContent({
   const [hasChanges, setHasChanges] = useState(
     isChapterEditorDraftDirty(lastSavedDraftRef.current, initialDraft),
   );
+  const [dirtyRevision, setDirtyRevision] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [findReplaceMode, setFindReplaceMode] = useState<"closed" | "find" | "replace">("closed");
   const [wordCount, setWordCount] = useState(() => wordsCount(initialDraft.content));
   const [lineNumberDigits, setLineNumberDigits] = useState(1);
-  const saveStatus = isSaving ? "saving" : hasChanges ? "unsaved" : "saved";
   const latestDraftRef = useRef(initialDraft);
   const latestDraftUpdatedAtRef = useRef(initialDraftUpdatedAt);
   const hasChangesRef = useRef(isChapterEditorDraftDirty(lastSavedDraftRef.current, initialDraft));
   const baseUpdatedAtRef = useRef(chapter.updatedAt);
+
+  const { enabled: autoSaveEnabled, isReady: isAutoSaveReady } = useEditorAutoSaveSetting();
 
   const showLockedToast = useMemo(
     () => createToastThrottler(t("writing.agentLockedChapterEdit")),
@@ -235,6 +239,7 @@ function ChapterEditorContent({
       hasChangesRef.current = isDirty;
       setHasChanges(isDirty);
       if (isDirty) {
+        setDirtyRevision((prev) => prev + 1);
         persistDraft(nextDraft);
       }
       return { draft: nextDraft, isDirty };
@@ -307,11 +312,11 @@ function ChapterEditorContent({
   }, [chapter.id, containerRef, editor, onScrollPositionChange]);
 
   const handleSave = useCallback(
-    async (isManualSave = false) => {
-      if (!editor) return;
+    async (reason: SaveReason = "manual", revision?: number): Promise<SaveResult> => {
+      if (!editor) return { status: "unchanged" };
       if (isAgentLocked) {
         showLockedToast();
-        return;
+        return { status: "blocked", reason: t("writing.agentLockedChapterEdit") };
       }
 
       const draftToSave = latestDraftRef.current;
@@ -322,10 +327,25 @@ function ChapterEditorContent({
         hasChangesRef.current = true;
         setHasChanges(true);
         showContentLimitToast(draftToSave.content);
-        return;
+        return {
+          status: "blocked",
+          reason: t("common.editorContentTooLarge", {
+            lineCount: contentLimit.lineCount,
+            characterCount: contentLimit.characterCount,
+            maxLines: MAX_EDITOR_CONTENT_LINES,
+            maxCharacters: MAX_EDITOR_CONTENT_CHARACTERS,
+          }),
+        };
       }
       rejectedContentRef.current = null;
+
+      const isDirty = isChapterEditorDraftDirty(lastSavedDraftRef.current, draftToSave);
+      if (!isDirty && !hasChangesRef.current) {
+        return { status: "unchanged" };
+      }
+
       const currentWordCount = wordsCount(draftToSave.content);
+      const targetRevision = revision ?? dirtyRevision;
 
       setIsSaving(true);
       try {
@@ -344,32 +364,78 @@ function ChapterEditorContent({
         });
         baseUpdatedAtRef.current = updatedChapter.updatedAt;
         void clearWorkingCopy(draftToSave, draftUpdatedAt);
-        syncDirtyStateFromEditor(editor);
+
+        const stillDirty = isChapterEditorDraftDirty(
+          lastSavedDraftRef.current,
+          latestDraftRef.current,
+        );
+        hasChangesRef.current = stillDirty;
+        setHasChanges(stillDirty);
+
         onChapterUpdate?.(updatedChapter);
 
-        if (isManualSave) {
+        if (reason === "manual") {
           toast.success(t("writing.saved"));
         }
-      } catch {
+
+        return { status: "saved", savedRevision: targetRevision };
+      } catch (error) {
         syncDirtyStateFromEditor(editor);
+        if (reason === "manual") {
+          toast.error(t("common.saveFailed"));
+        }
+        return { status: "failed", error };
       } finally {
         setIsSaving(false);
       }
     },
     [
       chapter.id,
+      clearWorkingCopy,
+      dirtyRevision,
       editor,
       isAgentLocked,
       onChapterUpdate,
+      persistWorkingCopy,
+      showContentLimitToast,
       showLockedToast,
       syncDirtyStateFromEditor,
       t,
       updateMutation,
-      clearWorkingCopy,
-      persistWorkingCopy,
-      showContentLimitToast,
     ],
   );
+
+  const autoSave = useAutoSave({
+    documentKey: `chapter:${chapter.id}`,
+    enabled: isAutoSaveReady && autoSaveEnabled && !isAgentLocked,
+    delayMs: 3000,
+    dirtyRevision,
+    hasChanges,
+    blockedReason: isAgentLocked ? t("writing.agentLockedChapterEdit") : null,
+    save: (reason, rev) => handleSave(reason, rev),
+  });
+
+  const combinedIsSaving = isSaving || autoSave.isSaving;
+  const saveStatus = combinedIsSaving ? "saving" : hasChanges ? "unsaved" : "saved";
+
+  useEditorSession({
+    documentKey: `chapter:${chapter.id}`,
+    entityType: "chapter",
+    entityId: chapter.id,
+    title: title.trim() || t("writing.untitledChapter"),
+    isDirty: hasChanges,
+    isSaving: combinedIsSaving,
+    getIsDirty: () => hasChangesRef.current,
+    save: async () => {
+      return autoSave.save("leave");
+    },
+    discard: async () => {
+      autoSave.cancel();
+      await workingCopy.discardWorkingCopy();
+      hasChangesRef.current = false;
+      setHasChanges(false);
+    },
+  });
 
   useEffect(() => {
     titleRef.current = title;
@@ -377,12 +443,12 @@ function ChapterEditorContent({
 
   useEffect(() => {
     const handleManualSave = () => {
-      void handleSave(true);
+      void autoSave.save("manual");
     };
 
     window.addEventListener(MANUAL_SAVE_EVENT, handleManualSave);
     return () => window.removeEventListener(MANUAL_SAVE_EVENT, handleManualSave);
-  }, [handleSave]);
+  }, [autoSave]);
 
   useEffect(() => {
     if (!editor) return;
@@ -447,13 +513,6 @@ function ChapterEditorContent({
     updateTabTitle,
   ]);
 
-  useAutoSave({
-    onSave: handleSave,
-    hasChanges,
-    enabled: !isAgentLocked,
-    interval: 3000,
-  });
-
   useHotkeys(
     "mod+s",
     (event) => {
@@ -462,7 +521,7 @@ function ChapterEditorContent({
         showLockedToast();
         return;
       }
-      handleSave(true);
+      void autoSave.save("manual");
     },
     { enableOnFormTags: true },
   );
@@ -512,6 +571,7 @@ function ChapterEditorContent({
       hasChangesRef.current = isDirty;
       setHasChanges(isDirty);
       if (isDirty) {
+        setDirtyRevision((prev) => prev + 1);
         persistDraft(draft);
       }
     }
@@ -617,7 +677,7 @@ function ChapterEditorContent({
     >
       <EditorToolbar
         editor={editor}
-        onSave={handleSave}
+        onSave={() => void autoSave.save("manual")}
         isSaving={saveStatus === "saving"}
         hasChanges={hasChanges}
         isAgentLocked={isAgentLocked}
@@ -659,8 +719,8 @@ function ChapterEditorContent({
             value={title}
             onChange={handleTitleChange}
             onBlur={() => {
-              if (hasChanges && !isAgentLocked) {
-                handleSave();
+              if (hasChanges && !isAgentLocked && autoSaveEnabled) {
+                void autoSave.save("auto");
               }
             }}
             disabled={isAgentLocked}

@@ -11,6 +11,7 @@ import { PanelLayoutLoading } from "@/components";
 import { toast } from "@/components/toast";
 import { AssistantSidebarHost, MobileAppSidebarTrigger, useAppShell } from "@/features/app-shell";
 import type { AssistantSidebarState } from "@/features/assistant";
+import { requestLeave, useEditorSessionStore } from "@/features/editor-session";
 import { useMobileSidebarSwipe } from "@/hooks/use-mobile-sidebar-swipe";
 import { usePersistedPanelLayout } from "@/hooks/use-persisted-panel-layout";
 import {
@@ -249,11 +250,14 @@ export function CharactersPage() {
     },
   });
 
-  const handleCreateCharacter = () => {
+  const handleCreateCharacter = useCallback(() => {
     if (isCreatingCharacterRef.current) return;
-    isCreatingCharacterRef.current = true;
-    createMutation.mutate();
-  };
+    const affectedKeys = currentCharacterId ? [`character:${currentCharacterId}`] : [];
+    void requestLeave(affectedKeys, () => {
+      isCreatingCharacterRef.current = true;
+      createMutation.mutate();
+    });
+  }, [createMutation, currentCharacterId]);
 
   const updateMutation = useMutation({
     mutationFn: ({
@@ -313,6 +317,7 @@ export function CharactersPage() {
   const deleteMutation = useMutation({
     mutationFn: (characterId: string) => deleteCharacter(characterId),
     onSuccess: async (_data, characterId) => {
+      useEditorSessionStore.getState().unregisterSession(`character:${characterId}`);
       if (!currentProjectId) return;
       if (useCharactersStore.getState().currentCharacterId === characterId) {
         skipCharacterRestoreProjectIdRef.current = currentProjectId;
@@ -328,6 +333,9 @@ export function CharactersPage() {
   const batchDeleteMutation = useMutation({
     mutationFn: (characterIds: string[]) => batchDeleteCharacters(currentProjectId!, characterIds),
     onSuccess: async (_deletedCount, characterIds) => {
+      characterIds.forEach((id) => {
+        useEditorSessionStore.getState().unregisterSession(`character:${id}`);
+      });
       if (!currentProjectId) return;
       const currentCharacterId = useCharactersStore.getState().currentCharacterId;
       if (currentCharacterId && characterIds.includes(currentCharacterId)) {
@@ -364,16 +372,29 @@ export function CharactersPage() {
     },
   });
 
-  const handleSelectProject = (projectId: string) => {
-    setCurrentProject(projectId || null);
-  };
+  const handleSelectProject = useCallback(
+    (projectId: string) => {
+      if (projectId === currentProjectId) return;
+      void requestLeave("all", () => {
+        setCurrentProject(projectId || null);
+      });
+    },
+    [currentProjectId, setCurrentProject],
+  );
 
-  const handleSelectCharacter = (characterId: string) => {
-    queryClient.removeQueries({ queryKey: ["character", characterId] });
-    setCurrentCharacter(characterId);
-    setSelectedCharacterLoadVersion((prev) => prev + 1);
-    setListOpen(false);
-  };
+  const handleSelectCharacter = useCallback(
+    (characterId: string) => {
+      if (characterId === currentCharacterId) return;
+      const affectedKeys = currentCharacterId ? [`character:${currentCharacterId}`] : [];
+      void requestLeave(affectedKeys, () => {
+        queryClient.removeQueries({ queryKey: ["character", characterId] });
+        setCurrentCharacter(characterId);
+        setSelectedCharacterLoadVersion((prev) => prev + 1);
+        setListOpen(false);
+      });
+    },
+    [currentCharacterId, queryClient, setCurrentCharacter, setListOpen],
+  );
 
   const list = (
     <CharacterList

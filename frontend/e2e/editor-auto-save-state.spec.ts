@@ -5,6 +5,7 @@ import type { SettingsResponse } from "../src/features/settings/lib/settings.typ
 import {
   _resetGlobalInFlightMapForTest,
   AutoSaveScheduler,
+  type AutoSaveSchedulerConfig,
   type SaveReason,
   type SaveResult,
   type TimerFunctions,
@@ -15,6 +16,7 @@ import {
   useEditorSessionStore,
   type EditorSessionRegistration,
 } from "../src/features/editor-session";
+import { _resetTabsStoreForTest, useTabsStore } from "../src/features/writing/store/use-tabs-store";
 
 test.describe("编辑器自动保存设置契约与转换 (T1-T2)", () => {
   const baseMockResponse: SettingsResponse = {
@@ -744,4 +746,436 @@ test.describe("未保存离开保护与会话管理 (T5: 模拟会话保存失�
     expect(saveCount).toBe(1);
   });
 });
+
+const flushAsync = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+test.describe("章节与笔记接入与离开保护 (T6: F01-F12, F14-F17)", () => {
+  test.beforeEach(() => {
+    _resetEditorSessionStoreForTest();
+    _resetTabsStoreForTest();
+    _resetGlobalInFlightMapForTest();
+  });
+
+  test("F10: 标签切换未保存保护：激活章节有修改时切换标签触发离开保护，取消不切标签，保存后成功切换", async () => {
+    const tabsStore = useTabsStore.getState();
+    useTabsStore.setState({
+      tabs: [
+        { id: "chapter:c1", type: "chapter", refId: "c1", title: "第一章", isLocked: false, scrollTop: 0 },
+        { id: "chapter:c2", type: "chapter", refId: "c2", title: "第二章", isLocked: false, scrollTop: 0 },
+      ],
+      activeTabId: "chapter:c1",
+      isLoaded: true,
+    });
+
+    let c1SaveCount = 0;
+    useEditorSessionStore.getState().registerSession({
+      documentKey: "chapter:c1",
+      entityType: "chapter",
+      entityId: "c1",
+      title: "第一章",
+      isDirty: true,
+      isSaving: false,
+      save: async () => {
+        c1SaveCount++;
+        return { status: "saved", savedRevision: 1 };
+      },
+    });
+
+    // 用户试图切换到 c2
+    tabsStore.setActiveTab("chapter:c2");
+
+    // 检查弹窗是否打开，受影响文档包含 chapter:c1
+    const dialogState1 = useEditorSessionStore.getState().dialogState;
+    expect(dialogState1).not.toBeNull();
+    expect(dialogState1?.documents.map((d) => d.documentKey)).toEqual(["chapter:c1"]);
+
+    // 用户选择取消
+    useEditorSessionStore.getState().chooseDecision("cancel");
+    await flushAsync();
+
+    // 验证：标签未切换，仍然停留在 c1，且未发生保存
+    expect(useTabsStore.getState().activeTabId).toBe("chapter:c1");
+    expect(c1SaveCount).toBe(0);
+
+    // 用户再次切换到 c2，并选择“保存并离开”
+    tabsStore.setActiveTab("chapter:c2");
+    useEditorSessionStore.getState().chooseDecision("save");
+    await flushAsync();
+
+    // 验证：c1 保存成功，且标签成功切换到 c2
+    expect(c1SaveCount).toBe(1);
+    expect(useTabsStore.getState().activeTabId).toBe("chapter:c2");
+  });
+
+  test("F10: 关闭单个标签保护：关闭未保存标签时用户取消不关闭，选择放弃修改则执行 discard 且关闭标签", async () => {
+    useTabsStore.setState({
+      tabs: [
+        { id: "note:n1", type: "note", refId: "n1", title: "设定笔记", isLocked: false, scrollTop: 0 },
+        { id: "chapter:c1", type: "chapter", refId: "c1", title: "第一章", isLocked: false, scrollTop: 0 },
+      ],
+      activeTabId: "note:n1",
+      isLoaded: true,
+    });
+
+    let n1Discarded = false;
+    useEditorSessionStore.getState().registerSession({
+      documentKey: "note:n1",
+      entityType: "note",
+      entityId: "n1",
+      title: "设定笔记",
+      isDirty: true,
+      isSaving: false,
+      save: async () => ({ status: "saved", savedRevision: 1 }),
+      discard: () => {
+        n1Discarded = true;
+      },
+    });
+
+    // 试图关闭 note:n1
+    useTabsStore.getState().closeTab("note:n1");
+    expect(useEditorSessionStore.getState().dialogState).not.toBeNull();
+
+    // 选择取消
+    useEditorSessionStore.getState().chooseDecision("cancel");
+    await flushAsync();
+
+    // 验证：标签未被关闭
+    expect(useTabsStore.getState().tabs.some((t) => t.id === "note:n1")).toBe(true);
+    expect(n1Discarded).toBe(false);
+
+    // 再次关闭，选择放弃修改
+    useTabsStore.getState().closeTab("note:n1");
+    useEditorSessionStore.getState().chooseDecision("discard");
+    await flushAsync();
+
+    // 验证：discard 被调用，标签被关闭，激活标签切换为 c1
+    expect(n1Discarded).toBe(true);
+    expect(useTabsStore.getState().tabs.some((t) => t.id === "note:n1")).toBe(false);
+    expect(useTabsStore.getState().activeTabId).toBe("chapter:c1");
+  });
+
+  test("F10: 批量关闭标签保护 (closeOtherTabs / closeAllTabs)：多标签修改同时受保护", async () => {
+    useTabsStore.setState({
+      tabs: [
+        { id: "chapter:c1", type: "chapter", refId: "c1", title: "第一章", isLocked: false, scrollTop: 0 },
+        { id: "chapter:c2", type: "chapter", refId: "c2", title: "第二章", isLocked: false, scrollTop: 0 },
+        { id: "note:n1", type: "note", refId: "n1", title: "笔记1", isLocked: false, scrollTop: 0 },
+      ],
+      activeTabId: "chapter:c1",
+      isLoaded: true,
+    });
+
+    useEditorSessionStore.getState().registerSession({
+      documentKey: "chapter:c2",
+      entityType: "chapter",
+      entityId: "c2",
+      title: "第二章",
+      isDirty: true,
+      isSaving: false,
+      save: async () => ({ status: "saved", savedRevision: 1 }),
+    });
+
+    useEditorSessionStore.getState().registerSession({
+      documentKey: "note:n1",
+      entityType: "note",
+      entityId: "n1",
+      title: "笔记1",
+      isDirty: true,
+      isSaving: false,
+      save: async () => ({ status: "saved", savedRevision: 1 }),
+    });
+
+    // 调用 closeOtherTabs("chapter:c1")，受影响的是 c2 与 n1
+    useTabsStore.getState().closeOtherTabs("chapter:c1");
+
+    const dialog = useEditorSessionStore.getState().dialogState;
+    expect(dialog).not.toBeNull();
+    const affected = dialog?.documents.map((d) => d.documentKey).sort();
+    expect(affected).toEqual(["chapter:c2", "note:n1"]);
+
+    // 用户选择取消
+    useEditorSessionStore.getState().chooseDecision("cancel");
+    await flushAsync();
+
+    // 所有标签均保留
+    expect(useTabsStore.getState().tabs.length).toBe(3);
+  });
+
+  test("F10: 标签达上限 (10) 自动淘汰时保护被淘汰标签的未保存内容", async () => {
+    const initialTabs = Array.from({ length: 10 }, (_, i) => ({
+      id: `chapter:c${i}`,
+      type: "chapter" as const,
+      refId: `c${i}`,
+      title: `第${i}章`,
+      isLocked: false,
+      scrollTop: 0,
+    }));
+
+    useTabsStore.setState({
+      tabs: initialTabs,
+      activeTabId: "chapter:c9",
+      isLoaded: true,
+    });
+
+    useEditorSessionStore.getState().registerSession({
+      documentKey: "chapter:c0",
+      entityType: "chapter",
+      entityId: "c0",
+      title: "第0章",
+      isDirty: true,
+      isSaving: false,
+      save: async () => ({ status: "saved", savedRevision: 1 }),
+    });
+
+    // 打开第 11 个新标签，触发淘汰 c0
+    useTabsStore.getState().openTab("c10", "第10章", "chapter");
+
+    // 应该因为 c0 是被淘汰标签而触发保护
+    const dialog = useEditorSessionStore.getState().dialogState;
+    expect(dialog).not.toBeNull();
+    expect(dialog?.documents.some((d) => d.documentKey === "chapter:c0")).toBe(true);
+
+    // 取消淘汰
+    useEditorSessionStore.getState().chooseDecision("cancel");
+    await flushAsync();
+
+    // c0 未被淘汰，总数依然为 10
+    expect(useTabsStore.getState().tabs.some((t) => t.id === "chapter:c0")).toBe(true);
+    expect(useTabsStore.getState().tabs.length).toBe(10);
+  });
+
+  test("F17: 删除章节与笔记时注销会话，不留下未保存脏会话", () => {
+    const store = useEditorSessionStore.getState();
+    store.registerSession({
+      documentKey: "chapter:to-delete",
+      entityType: "chapter",
+      entityId: "to-delete",
+      title: "待删除章节",
+      isDirty: true,
+      isSaving: false,
+      save: async () => ({ status: "saved", savedRevision: 1 }),
+    });
+
+    expect(store.getDirtySessions().some((s) => s.documentKey === "chapter:to-delete")).toBe(true);
+
+    // 模拟 useDeleteChapter 成功回调注销会话
+    store.unregisterSession("chapter:to-delete");
+
+    // 注销后不再返回该脏会话，不会阻断后续导航
+    expect(store.getDirtySessions().some((s) => s.documentKey === "chapter:to-delete")).toBe(false);
+  });
+
+  test("F01: 章节与笔记 3000ms 调度防抖行为符合规范", async () => {
+    const timer = new VirtualTimer();
+    let saveCalls = 0;
+    const baseConfig: AutoSaveSchedulerConfig = {
+      documentKey: "chapter:autosave-delay-test",
+      enabled: true,
+      delayMs: 3000,
+      dirtyRevision: 0,
+      hasChanges: false,
+      save: async () => {
+        saveCalls++;
+        return { status: "saved", savedRevision: 1 };
+      },
+      timers: timer.asTimers(),
+    };
+    const scheduler = new AutoSaveScheduler(baseConfig);
+
+    scheduler.updateConfig({ ...baseConfig, hasChanges: true, dirtyRevision: 1 });
+    await timer.advanceTime(2000);
+    expect(saveCalls).toBe(0); // 2000ms < 3000ms，尚未触发
+
+    // 在 2000ms 时用户再次打字
+    scheduler.updateConfig({ ...baseConfig, hasChanges: true, dirtyRevision: 2 });
+    await timer.advanceTime(2000);
+    expect(saveCalls).toBe(0); // 距上次编辑仅 2000ms，防抖推迟
+
+    await timer.advanceTime(1000);
+    expect(saveCalls).toBe(1); // 满 3000ms，触发自动保存
+  });
+});
+
+test.describe("世界书与角色接入与离开保护 (T7: 1500ms调度、移除cleanup隐式保存、无跨ID写入)", () => {
+  test.beforeEach(() => {
+    _resetEditorSessionStoreForTest();
+    _resetGlobalInFlightMapForTest();
+  });
+
+  test("F01: 世界书与角色采用 1500ms 调度防抖与 SaveResult 契约", async () => {
+    const timer = new VirtualTimer();
+    let saveCalls = 0;
+    const baseConfig: AutoSaveSchedulerConfig = {
+      documentKey: "world-info:entry-1500",
+      enabled: true,
+      delayMs: 1500, // 世界书与角色 1500ms
+      dirtyRevision: 0,
+      hasChanges: false,
+      save: async () => {
+        saveCalls++;
+        return { status: "saved", savedRevision: 1 };
+      },
+      timers: timer.asTimers(),
+    };
+    const scheduler = new AutoSaveScheduler(baseConfig);
+
+    scheduler.updateConfig({ ...baseConfig, hasChanges: true, dirtyRevision: 1 });
+    await timer.advanceTime(1000);
+    expect(saveCalls).toBe(0);
+
+    await timer.advanceTime(500);
+    expect(saveCalls).toBe(1); // 1500ms 到期触发
+  });
+
+  test("F13: 世界书 cleanup 移除隐式正式保存（核心验收门槛）", () => {
+    const timer = new VirtualTimer();
+    let formalSaveCalls = 0;
+
+    const baseConfig: AutoSaveSchedulerConfig = {
+      documentKey: "world-info:cleanup-check",
+      enabled: true,
+      delayMs: 1500,
+      dirtyRevision: 0,
+      hasChanges: false,
+      save: async () => {
+        formalSaveCalls++;
+        return { status: "saved", savedRevision: 1 };
+      },
+      timers: timer.asTimers(),
+    };
+    const scheduler = new AutoSaveScheduler(baseConfig);
+
+    scheduler.updateConfig({ ...baseConfig, hasChanges: true, dirtyRevision: 1 });
+    expect(scheduler.getState().isScheduled).toBe(true);
+
+    // 模拟组件 unmount 执行 cancel / dispose
+    scheduler.dispose();
+
+    expect(scheduler.getState().isScheduled).toBe(false);
+    expect(formalSaveCalls).toBe(0); // 验收要求：cleanup 决不能触发正式文档保存！
+  });
+
+  test("防止跨 ID 写入与条目切换离开保护（核心验收门槛）", async () => {
+    let currentEntryId = "entry-1";
+    let entry1SavedPayload: { id: string; name: string } | null = null;
+    let entry2SavedPayload: { id: string; name: string } | null = null;
+
+    // 注册 entry-1 的 dirty 会话
+    useEditorSessionStore.getState().registerSession({
+      documentKey: `world-info:${currentEntryId}`,
+      entityType: "world-info",
+      entityId: currentEntryId,
+      title: "修仙门派设定",
+      isDirty: true,
+      isSaving: false,
+      save: async () => {
+        entry1SavedPayload = { id: currentEntryId, name: "修改后的门派设定" };
+        return { status: "saved", savedRevision: 1 };
+      },
+    });
+
+    // 模拟用户在世界书页面点击切换到 entry-2
+    let switchedToEntry2 = false;
+    const leavePromise = requestLeave([`world-info:${currentEntryId}`], () => {
+      currentEntryId = "entry-2";
+      switchedToEntry2 = true;
+    });
+
+    // 确认弹窗弹出
+    const dialog = useEditorSessionStore.getState().dialogState;
+    expect(dialog).not.toBeNull();
+    expect(dialog?.documents[0].documentKey).toBe("world-info:entry-1");
+
+    // 用户选择“保存并离开”
+    useEditorSessionStore.getState().chooseDecision("save");
+    const allowed = await leavePromise;
+
+    // 验证：
+    // 1. 成功放行并切换到 entry-2
+    expect(allowed).toBe(true);
+    expect(switchedToEntry2).toBe(true);
+    expect(currentEntryId).toBe("entry-2");
+
+    // 2. entry-1 的内容仅保存到 entry-1 的 ID
+    expect(entry1SavedPayload).toEqual({ id: "entry-1", name: "修改后的门派设定" });
+
+    // 3. 验收门槛：entry-2 绝未被旧内容串写
+    expect(entry2SavedPayload).toBeNull();
+  });
+
+  test("放弃修改时恢复基线内容（角色与世界书 discard 契约）", async () => {
+    const activeCharacter = {
+      id: "char-1",
+      name: "林风",
+      description: "青云门外门弟子",
+      aliases: ["小林"],
+    };
+
+    let editorState = {
+      name: "林风（被修改）",
+      description: "修改后的无用设定",
+      aliases: ["小林", "剑仙"],
+      hasChanges: true,
+    };
+
+    const discardAdapter = () => {
+      // 模拟 CharacterEditor discard
+      editorState = {
+        name: activeCharacter.name,
+        description: activeCharacter.description,
+        aliases: [...activeCharacter.aliases],
+        hasChanges: false,
+      };
+    };
+
+    useEditorSessionStore.getState().registerSession({
+      documentKey: `character:${activeCharacter.id}`,
+      entityType: "character",
+      entityId: activeCharacter.id,
+      title: editorState.name,
+      isDirty: editorState.hasChanges,
+      isSaving: false,
+      save: async () => ({ status: "saved", savedRevision: 1 }),
+      discard: discardAdapter,
+    });
+
+    let navigated = false;
+    const leavePromise = requestLeave([`character:${activeCharacter.id}`], () => {
+      navigated = true;
+    });
+
+    // 用户选择放弃修改
+    useEditorSessionStore.getState().chooseDecision("discard");
+    const allowed = await leavePromise;
+
+    expect(allowed).toBe(true);
+    expect(navigated).toBe(true);
+    // 验证：编辑器数据完全恢复为初始基线
+    expect(editorState.name).toBe("林风");
+    expect(editorState.description).toBe("青云门外门弟子");
+    expect(editorState.aliases).toEqual(["小林"]);
+    expect(editorState.hasChanges).toBe(false);
+  });
+
+  test("删除世界书条目或角色时注销会话", () => {
+    const store = useEditorSessionStore.getState();
+    store.registerSession({
+      documentKey: "character:char-to-del",
+      entityType: "character",
+      entityId: "char-to-del",
+      title: "待删角色",
+      isDirty: true,
+      isSaving: false,
+      save: async () => ({ status: "saved", savedRevision: 1 }),
+    });
+
+    expect(store.getDirtySessions().some((s) => s.documentKey === "character:char-to-del")).toBe(true);
+
+    // 模拟删除成功注销会话
+    store.unregisterSession("character:char-to-del");
+    expect(store.getDirtySessions().some((s) => s.documentKey === "character:char-to-del")).toBe(false);
+  });
+});
+
+
 

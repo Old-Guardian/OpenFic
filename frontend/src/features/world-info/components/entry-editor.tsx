@@ -12,6 +12,9 @@ import { useTranslation } from "react-i18next";
 
 import { AliasInput, MarkdownEditor } from "@/components";
 import { toast } from "@/components/toast";
+import { useEditorSession } from "@/features/editor-session";
+import { useEditorAutoSaveSetting } from "@/features/settings/hooks/use-editor-auto-save-setting";
+import { useAutoSave, type SaveReason, type SaveResult } from "@/hooks/use-auto-save";
 import { updateWorldInfoEntry } from "@/lib/api-client";
 import {
   getEditorContentLimit,
@@ -55,18 +58,24 @@ export function EntryEditor({
 }: EntryEditorProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const { enabled: autoSaveEnabled, isReady: isAutoSaveReady } = useEditorAutoSaveSetting();
 
   const [name, setName] = useState(entry.name);
   const [aliases, setAliases] = useState<string[]>(entry.aliases ?? []);
   const [tokenCount, setTokenCount] = useState<number>(entry.tokenCount || 0);
   const [hasChanges, setHasChanges] = useState(false);
+  const [dirtyRevision, setDirtyRevision] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
 
   const savedContentRef = useRef(entry.content);
   const savedNameRef = useRef(entry.name);
   const savedAliasesRef = useRef<string[]>(entry.aliases ?? []);
+  const lastSavedBaselineRef = useRef({
+    name: entry.name,
+    content: entry.content,
+    aliases: entry.aliases ?? [],
+  });
   const hasChangesRef = useRef(false);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isSavingRef = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   const scrolledRef = useRef(false);
@@ -115,115 +124,158 @@ export function EntryEditor({
     [entry.id, queryClient, worldInfoId],
   );
 
-  const flushSave = useCallback(async () => {
-    if (isSavingRef.current || !hasChangesRef.current) return;
-    isSavingRef.current = true;
-    setIsSaving(true);
+  const handleSave = useCallback(
+    async (reason: SaveReason = "manual", revision?: number): Promise<SaveResult> => {
+      if (isAgentLocked) {
+        return { status: "blocked", reason: "Agent is running" };
+      }
 
-    const content = savedContentRef.current;
-    const newName = savedNameRef.current.trim();
-    const nextAliases = savedAliasesRef.current;
-    const contentLimit = getEditorContentLimit(content);
-    if (!contentLimit.isWithinLimit) {
-      showContentLimitToast(content);
-      isSavingRef.current = false;
-      setIsSaving(false);
-      return;
-    }
-    rejectedContentRef.current = null;
-    const hasDuplicateName = entries.some((item) => item.id !== entry.id && item.name === newName);
-    if (hasDuplicateName) {
-      toast.error(t("worldInfo.duplicateEntryName"));
-      isSavingRef.current = false;
-      setIsSaving(false);
-      return;
-    }
+      const content = savedContentRef.current;
+      const newName = savedNameRef.current.trim();
+      const nextAliases = savedAliasesRef.current;
 
-    const newTokenCount = countTokens(content);
-    setTokenCount(newTokenCount);
+      if (!newName) {
+        toast.error(t("worldInfo.entryNameRequired", "条目名称不能为空"));
+        return { status: "blocked", reason: "Name required" };
+      }
 
-    try {
-      const updated = await updateWorldInfoEntry(entry.id, {
-        name: newName,
-        content,
-        tokenCount: newTokenCount,
-        aliases: nextAliases,
-      });
-      updateCaches(updated);
+      const contentLimit = getEditorContentLimit(content);
+      if (!contentLimit.isWithinLimit) {
+        showContentLimitToast(content);
+        return {
+          status: "blocked",
+          reason: t("common.editorContentTooLarge", {
+            lineCount: contentLimit.lineCount,
+            characterCount: contentLimit.characterCount,
+            maxLines: MAX_EDITOR_CONTENT_LINES,
+            maxCharacters: MAX_EDITOR_CONTENT_CHARACTERS,
+          }),
+        };
+      }
+      rejectedContentRef.current = null;
+
+      const hasDuplicateName = entries.some(
+        (item) => item.id !== entry.id && item.name === newName,
+      );
+      if (hasDuplicateName) {
+        toast.error(t("worldInfo.duplicateEntryName"));
+        return { status: "blocked", reason: t("worldInfo.duplicateEntryName") };
+      }
+
+      if (!hasChangesRef.current) {
+        return { status: "unchanged" };
+      }
+
+      const targetRevision = revision ?? dirtyRevision;
+      const newTokenCount = countTokens(content);
+      setTokenCount(newTokenCount);
+
+      isSavingRef.current = true;
+      setIsSaving(true);
+
+      try {
+        const updated = await updateWorldInfoEntry(entry.id, {
+          name: newName,
+          content,
+          tokenCount: newTokenCount,
+          aliases: nextAliases,
+        });
+        updateCaches(updated);
+        lastSavedBaselineRef.current = {
+          name: updated.name,
+          content: updated.content,
+          aliases: updated.aliases ?? [],
+        };
+
+        const stillDirty =
+          savedNameRef.current.trim() !== updated.name ||
+          savedContentRef.current !== updated.content ||
+          JSON.stringify(savedAliasesRef.current) !== JSON.stringify(updated.aliases ?? []);
+
+        hasChangesRef.current = stillDirty;
+        setHasChanges(stillDirty);
+
+        if (reason === "manual") {
+          toast.success(t("common.saveSuccess"));
+        }
+
+        return { status: "saved", savedRevision: targetRevision };
+      } catch (error) {
+        hasChangesRef.current = true;
+        setHasChanges(true);
+        const detail = (error as { response?: { data?: { detail?: string } } }).response?.data
+          ?.detail;
+        if (reason === "manual" || reason === "leave") {
+          toast.error(detail || t("common.saveFailed"));
+        }
+        return { status: "failed", error };
+      } finally {
+        isSavingRef.current = false;
+        setIsSaving(false);
+      }
+    },
+    [dirtyRevision, entries, entry.id, isAgentLocked, showContentLimitToast, t, updateCaches],
+  );
+
+  const autoSave = useAutoSave({
+    documentKey: `world-info:${entry.id}`,
+    enabled: isAutoSaveReady && autoSaveEnabled && !isAgentLocked,
+    delayMs: AUTO_SAVE_DELAY,
+    dirtyRevision,
+    hasChanges,
+    blockedReason: isAgentLocked ? "Agent is running" : null,
+    save: (reason, rev) => handleSave(reason, rev),
+  });
+
+  const combinedIsSaving = isSaving || autoSave.isSaving;
+
+  useEditorSession({
+    documentKey: `world-info:${entry.id}`,
+    entityType: "world-info",
+    entityId: entry.id,
+    title: name.trim() || entry.name || t("worldInfo.untitledEntry", "未命名条目"),
+    isDirty: hasChanges,
+    isSaving: combinedIsSaving,
+    getIsDirty: () => hasChangesRef.current,
+    save: async () => autoSave.save("leave"),
+    discard: async () => {
+      autoSave.cancel();
+      const baseline = lastSavedBaselineRef.current;
+      savedNameRef.current = baseline.name;
+      savedContentRef.current = baseline.content;
+      savedAliasesRef.current = baseline.aliases;
+      setName(baseline.name);
+      setAliases(baseline.aliases);
+      setTokenCount(countTokens(baseline.content));
+      editorRef.current?.commands.setContent(baseline.content);
       hasChangesRef.current = false;
       setHasChanges(false);
-    } catch (error) {
-      hasChangesRef.current = true;
-      setHasChanges(true);
-      const detail = (error as { response?: { data?: { detail?: string } } }).response?.data
-        ?.detail;
-      toast.error(detail || t("common.saveFailed"));
-    } finally {
-      isSavingRef.current = false;
-      setIsSaving(false);
-    }
-  }, [entries, entry.id, showContentLimitToast, t, updateCaches]);
-
-  const triggerAutoSave = useCallback(() => {
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-    }
-    saveTimerRef.current = setTimeout(() => {
-      void flushSave();
-    }, AUTO_SAVE_DELAY);
-  }, [flushSave]);
-
-  const handleTitleChange = useCallback(
-    (newName: string) => {
-      setName(newName);
-      savedNameRef.current = newName;
-      hasChangesRef.current = true;
-      setHasChanges(true);
-      triggerAutoSave();
     },
-    [triggerAutoSave],
-  );
+  });
 
-  const handleAliasesChange = useCallback(
-    (nextAliases: string[]) => {
-      setAliases(nextAliases);
-      savedAliasesRef.current = nextAliases;
-      hasChangesRef.current = true;
-      setHasChanges(true);
-      triggerAutoSave();
-    },
-    [triggerAutoSave],
-  );
+  const handleTitleChange = useCallback((newName: string) => {
+    setName(newName);
+    savedNameRef.current = newName;
+    hasChangesRef.current = true;
+    setHasChanges(true);
+    setDirtyRevision((r) => r + 1);
+  }, []);
 
-  const handleContentChange = useCallback(
-    (markdown: string) => {
-      savedContentRef.current = markdown;
-      setTokenCount(countTokens(markdown));
-      hasChangesRef.current = true;
-      setHasChanges(true);
-      triggerAutoSave();
-    },
-    [triggerAutoSave],
-  );
+  const handleAliasesChange = useCallback((nextAliases: string[]) => {
+    setAliases(nextAliases);
+    savedAliasesRef.current = nextAliases;
+    hasChangesRef.current = true;
+    setHasChanges(true);
+    setDirtyRevision((r) => r + 1);
+  }, []);
 
-  const handleSave = useCallback(() => {
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-    void flushSave();
-  }, [flushSave]);
-
-  useEffect(() => {
-    return () => {
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current);
-      }
-      if (hasChangesRef.current) {
-        void flushSave();
-      }
-    };
-  }, [flushSave]);
+  const handleContentChange = useCallback((markdown: string) => {
+    savedContentRef.current = markdown;
+    setTokenCount(countTokens(markdown));
+    hasChangesRef.current = true;
+    setHasChanges(true);
+    setDirtyRevision((r) => r + 1);
+  }, []);
 
   useEffect(() => {
     const nextState = resolveRemoteEntryEditorState(
@@ -246,6 +298,11 @@ export function EntryEditor({
     savedNameRef.current = nextState.name;
     savedContentRef.current = nextState.content;
     savedAliasesRef.current = nextState.aliases;
+    lastSavedBaselineRef.current = {
+      name: nextState.name,
+      content: nextState.content,
+      aliases: nextState.aliases,
+    };
     setName(nextState.name);
     setTokenCount(nextState.tokenCount);
     setAliases(nextState.aliases);
@@ -298,8 +355,8 @@ export function EntryEditor({
       }
       content={entry.content}
       onContentChange={handleContentChange}
-      onSave={handleSave}
-      isSaving={isSaving}
+      onSave={() => void autoSave.save("manual")}
+      isSaving={combinedIsSaving}
       hasChanges={hasChanges}
       placeholder={t("worldInfo.contentPlaceholder")}
       titlePlaceholder={t("worldInfo.entryNamePlaceholder")}

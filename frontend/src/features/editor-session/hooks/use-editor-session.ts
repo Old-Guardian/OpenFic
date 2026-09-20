@@ -10,6 +10,8 @@ export function useEditorSession(registration: EditorSessionRegistration) {
   const documentKey = registration.documentKey;
 
   useEffect(() => {
+    if (!documentKey) return;
+
     const unregister = useEditorSessionStore.getState().registerSession({
       ...latestRegistrationRef.current,
       save: () => latestRegistrationRef.current.save(),
@@ -26,6 +28,8 @@ export function useEditorSession(registration: EditorSessionRegistration) {
   }, [documentKey]);
 
   useEffect(() => {
+    if (!documentKey) return;
+
     useEditorSessionStore.getState().updateSession(documentKey, {
       title: registration.title,
       isDirty: registration.isDirty,

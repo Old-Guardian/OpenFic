@@ -5,6 +5,9 @@ import { useTranslation } from "react-i18next";
 
 import { AliasInput, MarkdownEditor, Spinner } from "@/components";
 import { toast } from "@/components/toast";
+import { useEditorSession } from "@/features/editor-session";
+import { useEditorAutoSaveSetting } from "@/features/settings/hooks/use-editor-auto-save-setting";
+import { useAutoSave, type SaveReason, type SaveResult } from "@/hooks/use-auto-save";
 import type { Character } from "@/lib/character.types";
 import {
   getEditorContentLimit,
@@ -31,14 +34,23 @@ export function CharacterEditor({
   onSave,
 }: CharacterEditorProps) {
   const { t } = useTranslation();
+  const { enabled: autoSaveEnabled, isReady: isAutoSaveReady } = useEditorAutoSaveSetting();
+
   const [name, setName] = useState(character?.name ?? "");
   const [description, setDescription] = useState(character?.description ?? "");
   const [aliases, setAliases] = useState<string[]>(character?.aliases ?? []);
   const [tokenCount, setTokenCount] = useState(countTokens(character?.description ?? ""));
   const [hasChanges, setHasChanges] = useState(false);
+  const [dirtyRevision, setDirtyRevision] = useState(0);
+  const [isLocalSaving, setIsLocalSaving] = useState(false);
+
   const editorRef = useRef<Editor | null>(null);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestValueRef = useRef({
+    name: character?.name ?? "",
+    description: character?.description ?? "",
+    aliases: character?.aliases ?? [],
+  });
+  const lastSavedBaselineRef = useRef({
     name: character?.name ?? "",
     description: character?.description ?? "",
     aliases: character?.aliases ?? [],
@@ -64,85 +76,144 @@ export function CharacterEditor({
     [t],
   );
 
-  const flushSave = useCallback(async () => {
-    if (!character || isSavingRef.current || !hasChangesRef.current) return;
-    const nextName = latestValueRef.current.name.trim();
-    if (!nextName) return;
-    const description = latestValueRef.current.description;
-    const contentLimit = getEditorContentLimit(description);
-    if (!contentLimit.isWithinLimit) {
-      showContentLimitToast(description);
-      return;
-    }
-    rejectedContentRef.current = null;
-    const nextAliases = latestValueRef.current.aliases;
+  const handleSave = useCallback(
+    async (reason: SaveReason = "manual", revision?: number): Promise<SaveResult> => {
+      if (!character) return { status: "unchanged" };
+      if (isAgentLocked) {
+        return { status: "blocked", reason: "Agent is running" };
+      }
 
-    isSavingRef.current = true;
-    try {
-      await onSave({ name: nextName, description, aliases: nextAliases });
+      const nextName = latestValueRef.current.name.trim();
+      if (!nextName) {
+        return { status: "blocked", reason: t("characters.nameRequired", "角色名称不能为空") };
+      }
+
+      const currentDescription = latestValueRef.current.description;
+      const contentLimit = getEditorContentLimit(currentDescription);
+      if (!contentLimit.isWithinLimit) {
+        showContentLimitToast(currentDescription);
+        return {
+          status: "blocked",
+          reason: t("common.editorContentTooLarge", {
+            lineCount: contentLimit.lineCount,
+            characterCount: contentLimit.characterCount,
+            maxLines: MAX_EDITOR_CONTENT_LINES,
+            maxCharacters: MAX_EDITOR_CONTENT_CHARACTERS,
+          }),
+        };
+      }
+      rejectedContentRef.current = null;
+
+      if (!hasChangesRef.current) {
+        return { status: "unchanged" };
+      }
+
+      const targetRevision = revision ?? dirtyRevision;
+      const nextAliases = latestValueRef.current.aliases;
+
+      setIsLocalSaving(true);
+      isSavingRef.current = true;
+      try {
+        await onSave({ name: nextName, description: currentDescription, aliases: nextAliases });
+        lastSavedBaselineRef.current = {
+          name: nextName,
+          description: currentDescription,
+          aliases: nextAliases,
+        };
+
+        const stillDirty =
+          latestValueRef.current.name.trim() !== nextName ||
+          latestValueRef.current.description !== currentDescription ||
+          JSON.stringify(latestValueRef.current.aliases) !== JSON.stringify(nextAliases);
+
+        hasChangesRef.current = stillDirty;
+        setHasChanges(stillDirty);
+
+        if (reason === "manual") {
+          toast.success(t("common.saveSuccess"));
+        }
+
+        return { status: "saved", savedRevision: targetRevision };
+      } catch (error) {
+        hasChangesRef.current = true;
+        setHasChanges(true);
+        return { status: "failed", error };
+      } finally {
+        setIsLocalSaving(false);
+        isSavingRef.current = false;
+      }
+    },
+    [character, dirtyRevision, isAgentLocked, onSave, showContentLimitToast, t],
+  );
+
+  const autoSave = useAutoSave({
+    documentKey: character ? `character:${character.id}` : "",
+    enabled: isAutoSaveReady && autoSaveEnabled && !isAgentLocked,
+    delayMs: AUTO_SAVE_DELAY,
+    dirtyRevision,
+    hasChanges,
+    blockedReason: isAgentLocked ? "Agent is running" : null,
+    save: (reason, rev) => handleSave(reason, rev),
+  });
+
+  const combinedIsSaving = isSaving || isLocalSaving || autoSave.isSaving;
+
+  useEditorSession({
+    documentKey: character ? `character:${character.id}` : "",
+    entityType: "character",
+    entityId: character?.id ?? "",
+    title: name.trim() || character?.name || t("characters.untitledCharacter"),
+    isDirty: hasChanges,
+    isSaving: combinedIsSaving,
+    getIsDirty: () => hasChangesRef.current,
+    save: async () => autoSave.save("leave"),
+    discard: async () => {
+      autoSave.cancel();
+      if (character) {
+        const baseline = lastSavedBaselineRef.current;
+        setName(baseline.name);
+        setDescription(baseline.description);
+        setAliases(baseline.aliases);
+        setTokenCount(countTokens(baseline.description));
+        latestValueRef.current = {
+          name: baseline.name,
+          description: baseline.description,
+          aliases: baseline.aliases,
+        };
+        editorRef.current?.commands.setContent(baseline.description);
+      }
       hasChangesRef.current = false;
       setHasChanges(false);
-    } catch {
-      hasChangesRef.current = true;
-      setHasChanges(true);
-    } finally {
-      isSavingRef.current = false;
-    }
-  }, [character, onSave, showContentLimitToast]);
-
-  const scheduleSave = useCallback(() => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      saveTimerRef.current = null;
-      void flushSave();
-    }, AUTO_SAVE_DELAY);
-  }, [flushSave]);
-
-  const handleTitleChange = useCallback(
-    (value: string) => {
-      setName(value);
-      latestValueRef.current.name = value;
-      hasChangesRef.current = true;
-      setHasChanges(true);
-      scheduleSave();
     },
-    [scheduleSave],
-  );
+  });
 
-  const handleAliasesChange = useCallback(
-    (nextAliases: string[]) => {
-      setAliases(nextAliases);
-      latestValueRef.current.aliases = nextAliases;
-      hasChangesRef.current = true;
-      setHasChanges(true);
-      scheduleSave();
-    },
-    [scheduleSave],
-  );
+  const handleTitleChange = useCallback((value: string) => {
+    setName(value);
+    latestValueRef.current.name = value;
+    hasChangesRef.current = true;
+    setHasChanges(true);
+    setDirtyRevision((r) => r + 1);
+  }, []);
 
-  const handleContentChange = useCallback(
-    (value: string) => {
-      setDescription(value);
-      setTokenCount(countTokens(value));
-      latestValueRef.current.description = value;
-      hasChangesRef.current = true;
-      setHasChanges(true);
-      scheduleSave();
-    },
-    [scheduleSave],
-  );
+  const handleAliasesChange = useCallback((nextAliases: string[]) => {
+    setAliases(nextAliases);
+    latestValueRef.current.aliases = nextAliases;
+    hasChangesRef.current = true;
+    setHasChanges(true);
+    setDirtyRevision((r) => r + 1);
+  }, []);
 
-  const handleSave = useCallback(() => {
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-    void flushSave();
-  }, [flushSave]);
+  const handleContentChange = useCallback((value: string) => {
+    setDescription(value);
+    setTokenCount(countTokens(value));
+    latestValueRef.current.description = value;
+    hasChangesRef.current = true;
+    setHasChanges(true);
+    setDirtyRevision((r) => r + 1);
+  }, []);
 
   useEffect(() => {
     if (!character) return;
-
     if (hasChangesRef.current) return;
 
     const hasSameContent =
@@ -151,10 +222,6 @@ export function CharacterEditor({
       JSON.stringify(latestValueRef.current.aliases) === JSON.stringify(character.aliases ?? []);
     if (hasSameContent) return;
 
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
     setName(character.name);
     setDescription(character.description);
     setAliases(character.aliases ?? []);
@@ -164,15 +231,14 @@ export function CharacterEditor({
       description: character.description,
       aliases: character.aliases ?? [],
     };
+    lastSavedBaselineRef.current = {
+      name: character.name,
+      description: character.description,
+      aliases: character.aliases ?? [],
+    };
     hasChangesRef.current = false;
     setHasChanges(false);
   }, [character]);
-
-  useEffect(() => {
-    return () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    };
-  }, []);
 
   if (isLoading) {
     return (
@@ -224,8 +290,8 @@ export function CharacterEditor({
       }
       content={description}
       onContentChange={handleContentChange}
-      onSave={handleSave}
-      isSaving={isSaving}
+      onSave={() => void autoSave.save("manual")}
+      isSaving={combinedIsSaving}
       hasChanges={hasChanges}
       placeholder={t("characters.descriptionPlaceholder")}
       titlePlaceholder={t("characters.namePlaceholder")}

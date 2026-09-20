@@ -5,6 +5,9 @@ import { useTranslation } from "react-i18next";
 
 import { MarkdownEditor, Spinner } from "@/components";
 import { toast } from "@/components/toast";
+import { useEditorSession } from "@/features/editor-session";
+import { useEditorAutoSaveSetting } from "@/features/settings/hooks/use-editor-auto-save-setting";
+import { useAutoSave, type SaveReason, type SaveResult } from "@/hooks/use-auto-save";
 import { fetchNote } from "@/lib/api-client";
 import {
   getEditorContentLimit,
@@ -14,7 +17,6 @@ import {
 import type { Note } from "@/lib/note.types";
 import { createToastThrottler } from "@/lib/ui-utils";
 
-import { useAutoSave } from "../hooks/use-auto-save";
 import { useUpdateNote } from "../hooks/use-notes";
 import {
   shouldShowWritingEditorLoading,
@@ -75,6 +77,7 @@ function NoteEditorContent({
   const [hasChanges, setHasChanges] = useState(
     !areWritingWorkingCopyDraftsEqual(initialDraft, { title: note.title, content: note.content }),
   );
+  const [dirtyRevision, setDirtyRevision] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [editorContent, setEditorContent] = useState(initialDraft.content);
   const savedContentRef = useRef(initialDraft.content);
@@ -89,6 +92,8 @@ function NoteEditorContent({
   });
   const baseUpdatedAtRef = useRef(note.updatedAt);
   const rejectedContentRef = useRef<string | null>(null);
+
+  const { enabled: autoSaveEnabled, isReady: isAutoSaveReady } = useEditorAutoSaveSetting();
 
   const showContentLimitToast = useCallback(
     (content: string) => {
@@ -117,63 +122,124 @@ function NoteEditorContent({
     [persistWorkingCopy],
   );
 
-  const handleSave = useCallback(async () => {
-    if (isAgentLocked) {
-      showLockedToast();
-      return;
-    }
+  const handleSave = useCallback(
+    async (reason: SaveReason = "manual", revision?: number): Promise<SaveResult> => {
+      if (isAgentLocked) {
+        showLockedToast();
+        return { status: "blocked", reason: t("writing.agentLockedNoteEdit") };
+      }
 
-    const draftToSave = latestDraftRef.current;
-    const draftUpdatedAt = latestDraftUpdatedAtRef.current;
-    const contentLimit = getEditorContentLimit(draftToSave.content);
-    if (!contentLimit.isWithinLimit) {
-      persistWorkingCopy(draftToSave, baseUpdatedAtRef.current, draftUpdatedAt);
-      hasChangesRef.current = true;
-      setHasChanges(true);
-      showContentLimitToast(draftToSave.content);
-      return;
-    }
-    rejectedContentRef.current = null;
+      const draftToSave = latestDraftRef.current;
+      const draftUpdatedAt = latestDraftUpdatedAtRef.current;
+      const contentLimit = getEditorContentLimit(draftToSave.content);
+      if (!contentLimit.isWithinLimit) {
+        persistWorkingCopy(draftToSave, baseUpdatedAtRef.current, draftUpdatedAt);
+        hasChangesRef.current = true;
+        setHasChanges(true);
+        showContentLimitToast(draftToSave.content);
+        return {
+          status: "blocked",
+          reason: t("common.editorContentTooLarge", {
+            lineCount: contentLimit.lineCount,
+            characterCount: contentLimit.characterCount,
+            maxLines: MAX_EDITOR_CONTENT_LINES,
+            maxCharacters: MAX_EDITOR_CONTENT_CHARACTERS,
+          }),
+        };
+      }
+      rejectedContentRef.current = null;
 
-    setIsSaving(true);
-    try {
-      persistWorkingCopy(draftToSave, baseUpdatedAtRef.current, draftUpdatedAt);
-      const updatedNote = await updateMutation.mutateAsync({
-        noteId: note.id,
-        data: {
-          title: draftToSave.title,
-          content: draftToSave.content,
-        },
-      });
-      lastSavedDraftRef.current = {
-        title: updatedNote.title,
-        content: updatedNote.content,
-      };
-      baseUpdatedAtRef.current = updatedNote.updatedAt;
-      void clearWorkingCopy(draftToSave, draftUpdatedAt);
-      updateTabTitle(`note:${updatedNote.id}`, latestDraftRef.current.title);
-      const isDirty = !areWritingWorkingCopyDraftsEqual(
-        latestDraftRef.current,
-        lastSavedDraftRef.current,
-      );
-      hasChangesRef.current = isDirty;
-      setHasChanges(isDirty);
-    } catch {
-      hasChangesRef.current = true;
-      setHasChanges(true);
-    } finally {
-      setIsSaving(false);
-    }
-  }, [
-    clearWorkingCopy,
-    isAgentLocked,
-    note.id,
-    persistWorkingCopy,
-    showLockedToast,
-    showContentLimitToast,
-    updateMutation,
-    updateTabTitle,
-  ]);
+      const isDirty = !areWritingWorkingCopyDraftsEqual(draftToSave, lastSavedDraftRef.current);
+      if (!isDirty && !hasChangesRef.current) {
+        return { status: "unchanged" };
+      }
+
+      const targetRevision = revision ?? dirtyRevision;
+      setIsSaving(true);
+      try {
+        persistWorkingCopy(draftToSave, baseUpdatedAtRef.current, draftUpdatedAt);
+        const updatedNote = await updateMutation.mutateAsync({
+          noteId: note.id,
+          data: {
+            title: draftToSave.title,
+            content: draftToSave.content,
+          },
+        });
+        lastSavedDraftRef.current = {
+          title: updatedNote.title,
+          content: updatedNote.content,
+        };
+        baseUpdatedAtRef.current = updatedNote.updatedAt;
+        void clearWorkingCopy(draftToSave, draftUpdatedAt);
+        updateTabTitle(`note:${updatedNote.id}`, latestDraftRef.current.title);
+
+        const stillDirty = !areWritingWorkingCopyDraftsEqual(
+          latestDraftRef.current,
+          lastSavedDraftRef.current,
+        );
+        hasChangesRef.current = stillDirty;
+        setHasChanges(stillDirty);
+
+        if (reason === "manual") {
+          toast.success(t("writing.saved"));
+        }
+
+        return { status: "saved", savedRevision: targetRevision };
+      } catch (error) {
+        hasChangesRef.current = true;
+        setHasChanges(true);
+        if (reason === "manual") {
+          toast.error(t("common.saveFailed"));
+        }
+        return { status: "failed", error };
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [
+      clearWorkingCopy,
+      dirtyRevision,
+      isAgentLocked,
+      note.id,
+      persistWorkingCopy,
+      showContentLimitToast,
+      showLockedToast,
+      t,
+      updateMutation,
+      updateTabTitle,
+    ],
+  );
+
+  const autoSave = useAutoSave({
+    documentKey: `note:${note.id}`,
+    enabled: isAutoSaveReady && autoSaveEnabled && !isAgentLocked,
+    delayMs: 3000,
+    dirtyRevision,
+    hasChanges,
+    blockedReason: isAgentLocked ? t("writing.agentLockedNoteEdit") : null,
+    save: (reason, rev) => handleSave(reason, rev),
+  });
+
+  const combinedIsSaving = isSaving || autoSave.isSaving;
+
+  useEditorSession({
+    documentKey: `note:${note.id}`,
+    entityType: "note",
+    entityId: note.id,
+    title: title.trim() || t("writing.untitledNote"),
+    isDirty: hasChanges,
+    isSaving: combinedIsSaving,
+    getIsDirty: () => hasChangesRef.current,
+    save: async () => {
+      return autoSave.save("leave");
+    },
+    discard: async () => {
+      autoSave.cancel();
+      await workingCopy.discardWorkingCopy();
+      hasChangesRef.current = false;
+      setHasChanges(false);
+    },
+  });
 
   useEffect(() => {
     titleRef.current = title;
@@ -213,13 +279,6 @@ function NoteEditorContent({
     };
   }, [persistWorkingCopy]);
 
-  useAutoSave({
-    onSave: handleSave,
-    hasChanges,
-    enabled: !isAgentLocked,
-    interval: 3000,
-  });
-
   const handleTitleChange = (newTitle: string) => {
     setTitle(newTitle);
     titleRef.current = newTitle;
@@ -229,6 +288,7 @@ function NoteEditorContent({
     hasChangesRef.current = isDirty;
     setHasChanges(isDirty);
     if (isDirty) {
+      setDirtyRevision((r) => r + 1);
       persistDraft(draft);
     }
     updateTabTitle(`note:${note.id}`, newTitle);
@@ -244,6 +304,7 @@ function NoteEditorContent({
       hasChangesRef.current = isDirty;
       setHasChanges(isDirty);
       if (isDirty) {
+        setDirtyRevision((r) => r + 1);
         persistDraft(draft);
       }
     },
@@ -287,8 +348,8 @@ function NoteEditorContent({
       onTitleChange={handleTitleChange}
       content={editorContent}
       onContentChange={handleContentChange}
-      onSave={handleSave}
-      isSaving={isSaving}
+      onSave={() => void autoSave.save("manual")}
+      isSaving={combinedIsSaving}
       hasChanges={hasChanges}
       isLocked={isAgentLocked}
       onLockedAction={showLockedToast}

@@ -6,6 +6,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
+import { useEditorSessionStore } from "@/features/editor-session";
 import {
   fetchChapter,
   createChapter,
@@ -15,6 +16,7 @@ import {
   moveChapterToVolume,
 } from "@/lib/api-client";
 import type { ChapterCreate, ChapterUpdate } from "@/lib/chapter.types";
+import { deleteWritingWorkingCopy } from "@/lib/local-db";
 
 /**
  * 获取单个章节（完整内容）
@@ -28,8 +30,8 @@ export function useChapter(chapterId: string | null) {
     queryKey: ["chapter", chapterId],
     queryFn: () => fetchChapter(chapterId!),
     enabled: !!chapterId,
-    staleTime: 2 * 60 * 1000, // 2分钟内缓存有效
-    gcTime: 10 * 60 * 1000, // 10分钟后清理
+    staleTime: 1000 * 60 * 2, // 2分钟
+    gcTime: 1000 * 60 * 10, // 10分钟
   });
 }
 
@@ -43,8 +45,6 @@ export function useCreateChapter(projectId: string) {
     mutationFn: (data: ChapterCreate) => createChapter(projectId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["volume-tree", projectId] });
-      queryClient.invalidateQueries({ queryKey: ["chapter-summary-list", projectId] });
-      queryClient.invalidateQueries({ queryKey: ["long-term-summaries-page", projectId] });
       queryClient.invalidateQueries({ queryKey: ["projects"] });
     },
   });
@@ -61,17 +61,7 @@ export function useUpdateChapter() {
       updateChapter(chapterId, data),
     onSuccess: (updatedChapter) => {
       queryClient.setQueryData(["chapter", updatedChapter.id], updatedChapter);
-      queryClient.invalidateQueries({
-        queryKey: ["volume-tree", updatedChapter.projectId],
-      });
-      queryClient.invalidateQueries({
-        queryKey: ["chapter-summary-list", updatedChapter.projectId],
-      });
-      queryClient.invalidateQueries({
-        queryKey: ["long-term-summaries-page", updatedChapter.projectId],
-      });
-      // 刷新项目信息（更新 word_count）
-      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["volume-tree"] });
     },
   });
 }
@@ -84,7 +74,9 @@ export function useDeleteChapter(projectId: string) {
 
   return useMutation({
     mutationFn: (chapterId: string) => deleteChapter(chapterId),
-    onSuccess: () => {
+    onSuccess: (_data, chapterId) => {
+      void deleteWritingWorkingCopy("chapter", chapterId);
+      useEditorSessionStore.getState().unregisterSession(`chapter:${chapterId}`);
       queryClient.invalidateQueries({ queryKey: ["volume-tree", projectId] });
       queryClient.invalidateQueries({ queryKey: ["projects"] });
     },

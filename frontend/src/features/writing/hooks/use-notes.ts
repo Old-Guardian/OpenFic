@@ -2,6 +2,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import { toast } from "@/components";
+import { useEditorSessionStore } from "@/features/editor-session";
+import { deleteWritingWorkingCopy } from "@/lib/local-db";
 import {
   fetchNoteTree,
   fetchNote,
@@ -323,7 +325,9 @@ export function useDeleteNote(projectId: string) {
       }
       toast.error(t("writing.deleteNoteFailed"));
     },
-    onSuccess: () => {
+    onSuccess: (_data, noteId) => {
+      void deleteWritingWorkingCopy("note", noteId);
+      useEditorSessionStore.getState().unregisterSession(`note:${noteId}`);
       queryClient.invalidateQueries({ queryKey: ["note-tree", projectId] });
       toast.success(t("writing.deleteNoteSuccess"));
     },

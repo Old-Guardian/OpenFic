@@ -19,6 +19,7 @@ import { PanelLayoutLoading } from "@/components";
 import { toast } from "@/components/toast";
 import { AssistantSidebarHost, MobileAppSidebarTrigger, useAppShell } from "@/features/app-shell";
 import type { AssistantSidebarState } from "@/features/assistant";
+import { requestLeave, useEditorSessionStore } from "@/features/editor-session";
 import { useMobileSidebarSwipe } from "@/hooks/use-mobile-sidebar-swipe";
 import { usePersistedPanelLayout } from "@/hooks/use-persisted-panel-layout";
 import {
@@ -356,6 +357,7 @@ export function WorldInfoPage() {
   const deleteEntryMutation = useMutation({
     mutationFn: (entryId: string) => deleteWorldInfoEntry(entryId),
     onSuccess: async (_data, entryId) => {
+      useEditorSessionStore.getState().unregisterSession(`world-info:${entryId}`);
       if (!currentWorldInfoId) return;
       if (useWorldInfoStore.getState().currentEntryId === entryId) {
         skipEntryRestoreWorldInfoIdRef.current = currentWorldInfoId;
@@ -377,31 +379,41 @@ export function WorldInfoPage() {
 
   const handleSelectProject = useCallback(
     (projectId: string) => {
-      setCurrentProject(projectId || null);
-      setIsCreatingEntry(false);
-      setSidebarOpen(false);
-      closeAssistantSidebar();
+      if (projectId === currentProjectId) return;
+      void requestLeave("all", () => {
+        setCurrentProject(projectId || null);
+        setIsCreatingEntry(false);
+        setSidebarOpen(false);
+        closeAssistantSidebar();
+      });
     },
-    [closeAssistantSidebar, setCurrentProject, setSidebarOpen],
+    [closeAssistantSidebar, currentProjectId, setCurrentProject, setSidebarOpen],
   );
 
   /** 处理创建条目 */
   const handleCreateEntry = useCallback(() => {
     if (currentWorldInfoId) {
-      const name = generateUniqueEntryName(t("worldInfo.newEntry"), entries);
-      setCurrentEntry(null);
-      setIsCreatingEntry(true);
-      createEntryMutation.mutate(name);
+      const affectedKeys = currentEntryId ? [`world-info:${currentEntryId}`] : [];
+      void requestLeave(affectedKeys, () => {
+        const name = generateUniqueEntryName(t("worldInfo.newEntry"), entries);
+        setCurrentEntry(null);
+        setIsCreatingEntry(true);
+        createEntryMutation.mutate(name);
+      });
     }
-  }, [currentWorldInfoId, createEntryMutation, entries, setCurrentEntry, t]);
+  }, [createEntryMutation, currentEntryId, currentWorldInfoId, entries, setCurrentEntry, t]);
 
   /** 处理选择条目 */
   const handleSelectEntry = useCallback(
     (entryId: string) => {
-      setCurrentEntry(entryId);
-      setSidebarOpen(false);
+      if (entryId === currentEntryId) return;
+      const affectedKeys = currentEntryId ? [`world-info:${currentEntryId}`] : [];
+      void requestLeave(affectedKeys, () => {
+        setCurrentEntry(entryId);
+        setSidebarOpen(false);
+      });
     },
-    [setCurrentEntry, setSidebarOpen],
+    [currentEntryId, setCurrentEntry, setSidebarOpen],
   );
 
   /** 处理切换条目启用状态 */
@@ -505,6 +517,9 @@ export function WorldInfoPage() {
       if (!currentWorldInfoId) return;
       try {
         const count = await batchDeleteWorldInfoEntries(currentWorldInfoId, entryIds);
+        entryIds.forEach((id) => {
+          useEditorSessionStore.getState().unregisterSession(`world-info:${id}`);
+        });
         const currentEntryId = useWorldInfoStore.getState().currentEntryId;
         if (currentEntryId && entryIds.includes(currentEntryId)) {
           skipEntryRestoreWorldInfoIdRef.current = currentWorldInfoId;
@@ -563,10 +578,17 @@ export function WorldInfoPage() {
   /** 处理从搜索面板导航到匹配行 */
   const handleNavigateToMatch = useCallback(
     (entryId: string, lineNumber: number) => {
-      setCurrentEntry(entryId);
-      setScrollToLine(lineNumber);
+      if (entryId === currentEntryId) {
+        setScrollToLine(lineNumber);
+        return;
+      }
+      const affectedKeys = currentEntryId ? [`world-info:${currentEntryId}`] : [];
+      void requestLeave(affectedKeys, () => {
+        setCurrentEntry(entryId);
+        setScrollToLine(lineNumber);
+      });
     },
-    [setCurrentEntry],
+    [currentEntryId, setCurrentEntry],
   );
 
   /** 滚动完成后清除 */

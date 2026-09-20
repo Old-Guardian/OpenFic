@@ -7,6 +7,7 @@
 
 import { create } from "zustand";
 
+import { requestLeave } from "@/features/editor-session";
 import { getProjectTabs, setProjectTabs, type EditorTabRecord } from "@/lib/local-db";
 
 import type { EditorTab } from "../lib/tab.types";
@@ -38,6 +39,11 @@ interface TabsActions {
 }
 
 type TabsStore = TabsState & TabsActions;
+
+function getTabDocumentKey(tab: EditorTab | undefined | null): string | null {
+  if (!tab || isEmptyTab(tab.id) || !tab.refId) return null;
+  return `${tab.type}:${tab.refId}`;
+}
 
 export function removeTabsByReference(
   tabs: EditorTab[],
@@ -98,150 +104,261 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 
     if (state.currentProjectId === projectId && state.isLoaded) return;
 
-    if (state.currentProjectId !== projectId) {
-      set({
-        currentProjectId: projectId,
-        tabs: [],
-        activeTabId: null,
-        isLoaded: false,
-      });
-    }
+    await requestLeave("all", async () => {
+      if (state.currentProjectId !== projectId) {
+        set({
+          currentProjectId: projectId,
+          tabs: [],
+          activeTabId: null,
+          isLoaded: false,
+        });
+      }
 
-    const saved = await getProjectTabs(projectId);
-    if (saved) {
-      set({
-        currentProjectId: projectId,
-        tabs: saved.tabs.map(fromRecord),
-        activeTabId: saved.activeTabId,
-        isLoaded: true,
-      });
-    } else {
-      set({
-        currentProjectId: projectId,
-        tabs: [],
-        activeTabId: null,
-        isLoaded: true,
-      });
-    }
+      const saved = await getProjectTabs(projectId);
+      if (saved) {
+        set({
+          currentProjectId: projectId,
+          tabs: saved.tabs.map(fromRecord),
+          activeTabId: saved.activeTabId,
+          isLoaded: true,
+        });
+      } else {
+        set({
+          currentProjectId: projectId,
+          tabs: [],
+          activeTabId: null,
+          isLoaded: true,
+        });
+      }
+    });
   },
 
   openTab: (refId, title, type = "chapter") => {
-    const { tabs, currentProjectId } = get();
+    const { tabs, activeTabId } = get();
 
     const existingTab = tabs.find((t) => t.refId === refId && t.type === type);
     if (existingTab) {
-      set({ activeTabId: existingTab.id });
-      persistTabs(currentProjectId, tabs, existingTab.id);
+      if (existingTab.id === activeTabId) return;
+      const currentTab = tabs.find((t) => t.id === activeTabId);
+      const affectedKey = getTabDocumentKey(currentTab);
+      const affectedKeys = affectedKey ? [affectedKey] : [];
+
+      void requestLeave(affectedKeys, () => {
+        const { tabs: currentTabs, currentProjectId } = get();
+        set({ activeTabId: existingTab.id });
+        persistTabs(currentProjectId, currentTabs, existingTab.id);
+      });
       return;
     }
 
-    const nonEmptyTabs = tabs.filter((t) => !isEmptyTab(t.id));
-    let newTabs = [...tabs];
+    const currentTab = tabs.find((t) => t.id === activeTabId);
+    const affectedKeys: string[] = [];
+    const activeDocKey = getTabDocumentKey(currentTab);
+    if (activeDocKey) {
+      affectedKeys.push(activeDocKey);
+    }
 
+    const nonEmptyTabs = tabs.filter((t) => !isEmptyTab(t.id));
     if (nonEmptyTabs.length >= MAX_TABS) {
       const unlockIndex = nonEmptyTabs.findIndex((t) => !t.isLocked);
       if (unlockIndex === -1) {
         return;
       }
       const tabToRemove = nonEmptyTabs[unlockIndex];
-      newTabs = tabs.filter((t) => t.id !== tabToRemove.id);
+      const removeKey = getTabDocumentKey(tabToRemove);
+      if (removeKey && !affectedKeys.includes(removeKey)) {
+        affectedKeys.push(removeKey);
+      }
     }
 
-    const newTab: EditorTab = {
-      id: `${type}:${refId}`,
-      type,
-      refId,
-      title,
-      isLocked: false,
-      scrollTop: 0,
-    };
-    newTabs.push(newTab);
+    void requestLeave(affectedKeys, () => {
+      const { tabs: currentTabs, currentProjectId } = get();
+      const currentNonEmpty = currentTabs.filter((t) => !isEmptyTab(t.id));
+      let newTabs = [...currentTabs];
 
-    set({
-      tabs: newTabs,
-      activeTabId: newTab.id,
+      if (currentNonEmpty.length >= MAX_TABS) {
+        const unlockIndex = currentNonEmpty.findIndex((t) => !t.isLocked);
+        if (unlockIndex === -1) {
+          return;
+        }
+        const tabToRemove = currentNonEmpty[unlockIndex];
+        newTabs = currentTabs.filter((t) => t.id !== tabToRemove.id);
+      }
+
+      const newTab: EditorTab = {
+        id: `${type}:${refId}`,
+        type,
+        refId,
+        title,
+        isLocked: false,
+        scrollTop: 0,
+      };
+      newTabs.push(newTab);
+
+      set({
+        tabs: newTabs,
+        activeTabId: newTab.id,
+      });
+      persistTabs(currentProjectId, newTabs, newTab.id);
     });
-    persistTabs(currentProjectId, newTabs, newTab.id);
   },
 
   openSingleTab: (refId, title, type = "chapter") => {
-    const { currentProjectId } = get();
-    const newTab: EditorTab = {
-      id: `${type}:${refId}`,
-      type,
-      refId,
-      title,
-      isLocked: false,
-      scrollTop: 0,
-    };
+    const { tabs } = get();
+    const tabsToClose = tabs.filter(
+      (t) => !t.isLocked && !(t.type === type && t.refId === refId),
+    );
+    const affectedKeys = tabsToClose
+      .map(getTabDocumentKey)
+      .filter((k): k is string => Boolean(k));
 
-    set({
-      tabs: [newTab],
-      activeTabId: newTab.id,
+    void requestLeave(affectedKeys, () => {
+      const { currentProjectId } = get();
+      const newTab: EditorTab = {
+        id: `${type}:${refId}`,
+        type,
+        refId,
+        title,
+        isLocked: false,
+        scrollTop: 0,
+      };
+
+      set({
+        tabs: [newTab],
+        activeTabId: newTab.id,
+      });
+      persistTabs(currentProjectId, [newTab], newTab.id);
     });
-    persistTabs(currentProjectId, [newTab], newTab.id);
   },
 
   closeTab: (tabId) => {
-    const { tabs, activeTabId, currentProjectId } = get();
+    const { tabs } = get();
     const tabToClose = tabs.find((t) => t.id === tabId);
 
     if (!tabToClose || tabToClose.isLocked) {
       return;
     }
 
-    const tabIndex = tabs.findIndex((t) => t.id === tabId);
-    const newTabs = tabs.filter((t) => t.id !== tabId);
+    const docKey = getTabDocumentKey(tabToClose);
+    const affectedKeys = docKey ? [docKey] : [];
 
-    if (newTabs.length === 0) {
-      const emptyTabId = generateEmptyTabId();
-      const emptyTab: EditorTab = {
-        id: emptyTabId,
-        type: "chapter",
-        refId: null,
-        title: "",
-        isLocked: false,
-        scrollTop: 0,
-      };
-      set({
-        tabs: [emptyTab],
-        activeTabId: emptyTabId,
-      });
-      persistTabs(currentProjectId, [emptyTab], emptyTabId);
-      return;
-    }
+    void requestLeave(affectedKeys, () => {
+      const { tabs: currentTabs, activeTabId: currentActiveId, currentProjectId: projId } = get();
+      const tabIndex = currentTabs.findIndex((t) => t.id === tabId);
+      const newTabs = currentTabs.filter((t) => t.id !== tabId);
 
-    let newActiveId = activeTabId;
-    if (activeTabId === tabId) {
-      if (tabIndex >= newTabs.length) {
-        newActiveId = newTabs[newTabs.length - 1].id;
-      } else {
-        newActiveId = newTabs[tabIndex].id;
+      if (newTabs.length === 0) {
+        const emptyTabId = generateEmptyTabId();
+        const emptyTab: EditorTab = {
+          id: emptyTabId,
+          type: "chapter",
+          refId: null,
+          title: "",
+          isLocked: false,
+          scrollTop: 0,
+        };
+        set({
+          tabs: [emptyTab],
+          activeTabId: emptyTabId,
+        });
+        persistTabs(projId, [emptyTab], emptyTabId);
+        return;
       }
-    }
 
-    set({
-      tabs: newTabs,
-      activeTabId: newActiveId,
+      let newActiveId = currentActiveId;
+      if (currentActiveId === tabId) {
+        if (tabIndex >= newTabs.length) {
+          newActiveId = newTabs[newTabs.length - 1].id;
+        } else {
+          newActiveId = newTabs[tabIndex].id;
+        }
+      }
+
+      set({
+        tabs: newTabs,
+        activeTabId: newActiveId,
+      });
+      persistTabs(projId, newTabs, newActiveId);
     });
-    persistTabs(currentProjectId, newTabs, newActiveId);
   },
 
   closeOtherTabs: (tabId) => {
-    const { tabs, currentProjectId } = get();
-    const newTabs = tabs.filter((t) => t.id === tabId || t.isLocked);
-    set({
-      tabs: newTabs,
-      activeTabId: tabId,
+    const { tabs } = get();
+    const tabsToClose = tabs.filter((t) => t.id !== tabId && !t.isLocked);
+    const affectedKeys = tabsToClose
+      .map(getTabDocumentKey)
+      .filter((k): k is string => Boolean(k));
+
+    void requestLeave(affectedKeys, () => {
+      const { tabs: currentTabs, currentProjectId } = get();
+      const newTabs = currentTabs.filter((t) => t.id === tabId || t.isLocked);
+      set({
+        tabs: newTabs,
+        activeTabId: tabId,
+      });
+      persistTabs(currentProjectId, newTabs, tabId);
     });
-    persistTabs(currentProjectId, newTabs, tabId);
   },
 
   closeAllTabs: () => {
-    const { tabs, currentProjectId } = get();
-    const lockedTabs = tabs.filter((t) => t.isLocked && !isEmptyTab(t.id));
+    const { tabs } = get();
+    const tabsToClose = tabs.filter((t) => !t.isLocked);
+    const affectedKeys = tabsToClose
+      .map(getTabDocumentKey)
+      .filter((k): k is string => Boolean(k));
 
-    if (lockedTabs.length === 0) {
+    void requestLeave(affectedKeys, () => {
+      const { tabs: currentTabs, currentProjectId } = get();
+      const lockedTabs = currentTabs.filter((t) => t.isLocked && !isEmptyTab(t.id));
+
+      if (lockedTabs.length === 0) {
+        const emptyTabId = generateEmptyTabId();
+        const emptyTab: EditorTab = {
+          id: emptyTabId,
+          type: "chapter",
+          refId: null,
+          title: "",
+          isLocked: false,
+          scrollTop: 0,
+        };
+        set({
+          tabs: [emptyTab],
+          activeTabId: emptyTabId,
+        });
+        persistTabs(currentProjectId, [emptyTab], emptyTabId);
+      } else {
+        set({
+          tabs: lockedTabs,
+          activeTabId: lockedTabs[0].id,
+        });
+        persistTabs(currentProjectId, lockedTabs, lockedTabs[0].id);
+      }
+    });
+  },
+
+  setActiveTab: (tabId) => {
+    const { activeTabId, tabs } = get();
+    if (activeTabId === tabId) return;
+
+    const currentTab = tabs.find((t) => t.id === activeTabId);
+    const affectedKey = getTabDocumentKey(currentTab);
+    const affectedKeys = affectedKey ? [affectedKey] : [];
+
+    void requestLeave(affectedKeys, () => {
+      const { tabs: currentTabs, currentProjectId } = get();
+      set({ activeTabId: tabId });
+      persistTabs(currentProjectId, currentTabs, tabId);
+    });
+  },
+
+  showEmptyTab: () => {
+    const { tabs, activeTabId } = get();
+    const currentTab = tabs.find((t) => t.id === activeTabId);
+    const affectedKey = getTabDocumentKey(currentTab);
+    const affectedKeys = affectedKey ? [affectedKey] : [];
+
+    void requestLeave(affectedKeys, () => {
+      const { tabs: currentTabs, currentProjectId } = get();
       const emptyTabId = generateEmptyTabId();
       const emptyTab: EditorTab = {
         id: emptyTabId,
@@ -251,45 +368,14 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
         isLocked: false,
         scrollTop: 0,
       };
+
+      const newTabs = [...currentTabs, emptyTab];
       set({
-        tabs: [emptyTab],
+        tabs: newTabs,
         activeTabId: emptyTabId,
       });
-      persistTabs(currentProjectId, [emptyTab], emptyTabId);
-    } else {
-      set({
-        tabs: lockedTabs,
-        activeTabId: lockedTabs[0].id,
-      });
-      persistTabs(currentProjectId, lockedTabs, lockedTabs[0].id);
-    }
-  },
-
-  setActiveTab: (tabId) => {
-    const { tabs, currentProjectId } = get();
-    set({ activeTabId: tabId });
-    persistTabs(currentProjectId, tabs, tabId);
-  },
-
-  showEmptyTab: () => {
-    const { tabs, currentProjectId } = get();
-
-    const emptyTabId = generateEmptyTabId();
-    const emptyTab: EditorTab = {
-      id: emptyTabId,
-      type: "chapter",
-      refId: null,
-      title: "",
-      isLocked: false,
-      scrollTop: 0,
-    };
-
-    const newTabs = [...tabs, emptyTab];
-    set({
-      tabs: newTabs,
-      activeTabId: emptyTabId,
+      persistTabs(currentProjectId, newTabs, emptyTabId);
     });
-    persistTabs(currentProjectId, newTabs, emptyTabId);
   },
 
   toggleLock: (tabId) => {
@@ -390,3 +476,12 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 export const useActiveTabId = () => useTabsStore((s) => s.activeTabId);
 export const useTabs = () => useTabsStore((s) => s.tabs);
 export const useTabsLoaded = () => useTabsStore((s) => s.isLoaded);
+
+export function _resetTabsStoreForTest() {
+  useTabsStore.setState({
+    currentProjectId: null,
+    tabs: [],
+    activeTabId: null,
+    isLoaded: true,
+  });
+}
