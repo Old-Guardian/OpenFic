@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import vm from "node:vm";
+import { fileURLToPath } from "node:url";
 import { createCloseCoordinator } from "../../dist/main/close-coordinator.js";
 import { IpcChannels } from "../../dist/shared/ipc.js";
+
+const testDir = path.dirname(fileURLToPath(import.meta.url));
 
 function createMockWindow() {
   const sentMessages = [];
@@ -50,6 +56,92 @@ function createMockWindow() {
   return window;
 }
 
+test("guest preload 在前端监听器注册前收到关闭请求时会缓存并重放", async () => {
+  const preloadSource = fs.readFileSync(
+    path.resolve(testDir, "../../dist/preload/frontend-host-preload.cjs"),
+    "utf8",
+  );
+  const ipcListeners = new Map();
+  const hostMessages = [];
+  let exposedApi = null;
+  const electronMock = {
+    contextBridge: {
+      exposeInMainWorld: (name, api) => {
+        assert.equal(name, "openficDesktopHost");
+        exposedApi = api;
+      },
+    },
+    ipcRenderer: {
+      on: (channel, listener) => {
+        ipcListeners.set(channel, listener);
+      },
+      sendToHost: (channel, ...args) => {
+        hostMessages.push({ channel, args });
+      },
+    },
+    webFrame: {
+      getZoomFactor: () => 1,
+      setZoomFactor: () => {},
+    },
+  };
+
+  vm.runInNewContext(preloadSource, {
+    console,
+    exports: {},
+    module: { exports: {} },
+    Promise,
+    require: (specifier) => {
+      assert.equal(specifier, "electron");
+      return electronMock;
+    },
+    window: {
+      addEventListener: () => {},
+    },
+  });
+
+  assert.ok(exposedApi);
+  assert.deepEqual(hostMessages, [{ channel: "openfic:close-handler-ready", args: [] }]);
+  const emitCloseRequest = ipcListeners.get("openfic:request-close");
+  assert.equal(typeof emitCloseRequest, "function");
+
+  // 关闭请求先到，React effect 后注册。
+  emitCloseRequest();
+  let delivered = 0;
+  exposedApi.onRequestClose(() => {
+    delivered++;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(delivered, 1, "早期关闭请求必须在监听器注册后重放一次");
+});
+
+test("宿主渲染器就绪前的关闭请求会排队，就绪或重载后可靠重放", () => {
+  const mockWindow = createMockWindow();
+  const coordinator = createCloseCoordinator({
+    getWindow: () => mockWindow,
+    isBackendRunning: () => true,
+    stopBackend: async () => {},
+    quitApp: () => {},
+  });
+
+  coordinator.handleWindowClose({ preventDefault: () => {} });
+  assert.equal(coordinator.isPending(), true);
+  assert.equal(mockWindow.sentMessages.length, 0, "preload 就绪前不应发送可能丢失的消息");
+
+  coordinator.handleRendererReady({ send: () => {} });
+  assert.equal(mockWindow.sentMessages.length, 0, "不接受未授权渲染器的就绪信号");
+
+  coordinator.handleRendererReady(mockWindow.webContents);
+  assert.equal(mockWindow.sentMessages.length, 1, "就绪后必须重放排队的关闭请求");
+  coordinator.handleRendererReady(mockWindow.webContents);
+  assert.equal(mockWindow.sentMessages.length, 1, "重复就绪信号不得重复发送");
+
+  coordinator.markRendererNotReady();
+  coordinator.handleRendererReady(mockWindow.webContents);
+  assert.equal(mockWindow.sentMessages.length, 2, "等待确认时重载，新渲染器就绪后必须重放");
+});
+
 test("首次触发窗口关闭时阻止关闭，并向前端窗口发送 requestClose 消息", () => {
   const mockWindow = createMockWindow();
   let backendStopped = false;
@@ -65,6 +157,7 @@ test("首次触发窗口关闭时阻止关闭，并向前端窗口发送 request
       appQuit = true;
     },
   });
+  coordinator.handleRendererReady(mockWindow.webContents);
 
   let prevented = false;
   coordinator.handleWindowClose({
@@ -90,6 +183,7 @@ test("在确认请求处理中重复触发关闭时，不重复发送 requestClo
     stopBackend: async () => {},
     quitApp: () => {},
   });
+  coordinator.handleRendererReady(mockWindow.webContents);
 
   coordinator.handleWindowClose({ preventDefault: () => {} });
   assert.equal(mockWindow.sentMessages.length, 1);
@@ -115,6 +209,7 @@ test("前端返回取消或失败 ({ confirmed: false }) 时，保持窗口打�
       appQuit = true;
     },
   });
+  coordinator.handleRendererReady(mockWindow.webContents);
 
   coordinator.handleWindowClose({ preventDefault: () => {} });
 
@@ -145,6 +240,7 @@ test("非宿主窗口或未授权的 webContents 发送的 confirmClose 消息�
     stopBackend: async () => {},
     quitApp: () => {},
   });
+  coordinator.handleRendererReady(mockWindow.webContents);
 
   coordinator.handleWindowClose({ preventDefault: () => {} });
 
@@ -172,6 +268,7 @@ test("前端返回确认 ({ confirmed: true }) 时，允许窗口关闭", async 
       appQuit = true;
     },
   });
+  coordinator.handleRendererReady(mockWindow.webContents);
 
   coordinator.handleWindowClose({ preventDefault: () => {} });
 
@@ -209,6 +306,7 @@ test("app.before-quit 未确认时被拦截，确认后才停止后端并退出�
       appQuit = true;
     },
   });
+  coordinator.handleRendererReady(mockWindow.webContents);
 
   let beforeQuitPrevented = false;
   coordinator.handleBeforeQuit({

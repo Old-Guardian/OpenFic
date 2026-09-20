@@ -57,17 +57,39 @@ window.addEventListener(
   { capture: true },
 );
 
-const closeRequestListeners = new Set<() => void>();
+type CloseRequestListener = () => void | Promise<void>;
 
-ipcRenderer.on("openfic:request-close", () => {
-  for (const listener of closeRequestListeners) {
-    try {
-      listener();
-    } catch {
-      // ignore listener errors
-    }
+const closeRequestListeners = new Set<CloseRequestListener>();
+let hasPendingCloseRequest = false;
+
+function invokeCloseRequestListener(listener: CloseRequestListener): void {
+  try {
+    void Promise.resolve(listener()).catch(() => undefined);
+  } catch {
+    // 单个监听器失败不应阻塞其他关闭监听器。
   }
-});
+}
+
+function dispatchCloseRequest(): void {
+  if (closeRequestListeners.size === 0) {
+    hasPendingCloseRequest = true;
+    return;
+  }
+  hasPendingCloseRequest = false;
+  for (const listener of closeRequestListeners) {
+    invokeCloseRequestListener(listener);
+  }
+}
+
+ipcRenderer.on("openfic:request-close", dispatchCloseRequest);
+
+function reportCloseHandlerReady(): void {
+  // 宿主据此区分“webview 已存在”与“guest preload 已能可靠接收关闭请求”。
+  ipcRenderer.sendToHost("openfic:close-handler-ready");
+}
+
+ipcRenderer.on("openfic:probe-close-handler", reportCloseHandlerReady);
+reportCloseHandlerReady();
 
 contextBridge.exposeInMainWorld("openficDesktopHost", {
   publishAppearance: (payload: unknown): void => {
@@ -79,8 +101,12 @@ contextBridge.exposeInMainWorld("openficDesktopHost", {
   publishSocketDiagnostic: (payload: unknown): void => {
     ipcRenderer.sendToHost("openfic:socket-diagnostic", payload);
   },
-  onRequestClose: (callback: () => void): (() => void) => {
+  onRequestClose: (callback: CloseRequestListener): (() => void) => {
     closeRequestListeners.add(callback);
+    if (hasPendingCloseRequest) {
+      hasPendingCloseRequest = false;
+      invokeCloseRequestListener(callback);
+    }
     return () => {
       closeRequestListeners.delete(callback);
     };

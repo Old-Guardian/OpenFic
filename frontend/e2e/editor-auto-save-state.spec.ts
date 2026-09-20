@@ -1900,6 +1900,8 @@ test.describe("世界书与角色接入与离开保护 (T7: 1500ms调度、移�
   });
 });
 
+type DesktopCloseRequestHandler = () => void | Promise<void>;
+
 test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认通道及退出顺序)", () => {
   test.beforeEach(() => {
     _resetEditorSessionStoreForTest();
@@ -1912,14 +1914,14 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
 
   test("无修改时收到桌面端退出请求：直接确认 ({ confirmed: true })，不弹窗且不阻塞", async () => {
     let capturedDecision: { confirmed: boolean; reason?: string } | null = null;
-    let requestHandler: (() => Promise<void>) | null = null;
+    let requestHandler: DesktopCloseRequestHandler | null = null;
 
     // 模拟 openficDesktopHost 环境
     window.openficDesktopHost = {
       publishAppearance: () => {},
       publishLanguage: () => {},
       publishSocketDiagnostic: () => {},
-      onRequestClose: (handler: () => Promise<void>) => {
+      onRequestClose: (handler: DesktopCloseRequestHandler) => {
         requestHandler = handler;
         return () => {
           requestHandler = null;
@@ -1931,7 +1933,7 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
     };
 
     // 注册桌面退出监听
-    const unsubscribe = window.openficDesktopHost.onRequestClose!(async () => {
+    const unsubscribe = window.openficDesktopHost!.onRequestClose!(async () => {
       const confirmed = await requestLeave("all", () => {});
       window.openficDesktopHost?.respondCloseDecision?.({
         confirmed,
@@ -1964,13 +1966,13 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
     });
 
     let capturedDecision: { confirmed: boolean; reason?: string } | null = null;
-    let requestHandler: (() => Promise<void>) | null = null;
+    let requestHandler: DesktopCloseRequestHandler | null = null;
 
     window.openficDesktopHost = {
       publishAppearance: () => {},
       publishLanguage: () => {},
       publishSocketDiagnostic: () => {},
-      onRequestClose: (handler: () => Promise<void>) => {
+      onRequestClose: (handler: DesktopCloseRequestHandler) => {
         requestHandler = handler;
         return () => {
           requestHandler = null;
@@ -1981,7 +1983,7 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
       },
     };
 
-    window.openficDesktopHost.onRequestClose!(async () => {
+    window.openficDesktopHost!.onRequestClose!(async () => {
       const confirmed = await requestLeave("all", () => {});
       window.openficDesktopHost?.respondCloseDecision?.({
         confirmed,
@@ -2111,13 +2113,13 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
     });
 
     let capturedDecision: { confirmed: boolean; reason?: string } | null = null;
-    let requestHandler: (() => Promise<void>) | null = null;
+    let requestHandler: DesktopCloseRequestHandler | null = null;
 
     window.openficDesktopHost = {
       publishAppearance: () => {},
       publishLanguage: () => {},
       publishSocketDiagnostic: () => {},
-      onRequestClose: (handler: () => Promise<void>) => {
+      onRequestClose: (handler: DesktopCloseRequestHandler) => {
         requestHandler = handler;
         return () => {
           requestHandler = null;
@@ -2129,7 +2131,7 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
       },
     };
 
-    window.openficDesktopHost.onRequestClose!(async () => {
+    window.openficDesktopHost!.onRequestClose!(async () => {
       const confirmed = await requestLeave("all", () => {});
       window.openficDesktopHost?.respondCloseDecision?.({
         confirmed,
@@ -2163,13 +2165,13 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
     });
 
     let capturedDecision: { confirmed: boolean; reason?: string } | null = null;
-    let requestHandler: (() => Promise<void>) | null = null;
+    let requestHandler: DesktopCloseRequestHandler | null = null;
 
     window.openficDesktopHost = {
       publishAppearance: () => {},
       publishLanguage: () => {},
       publishSocketDiagnostic: () => {},
-      onRequestClose: (handler: () => Promise<void>) => {
+      onRequestClose: (handler: DesktopCloseRequestHandler) => {
         requestHandler = handler;
         return () => {
           requestHandler = null;
@@ -2180,7 +2182,7 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
       },
     };
 
-    window.openficDesktopHost.onRequestClose!(async () => {
+    window.openficDesktopHost!.onRequestClose!(async () => {
       const confirmed = await requestLeave("all", () => {});
       window.openficDesktopHost?.respondCloseDecision?.({
         confirmed,
@@ -2264,13 +2266,13 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
     });
 
     let capturedDecision: { confirmed: boolean; reason?: string } | null = null;
-    let requestHandler: (() => Promise<void>) | null = null;
+    let requestHandler: DesktopCloseRequestHandler | null = null;
 
     window.openficDesktopHost = {
       publishAppearance: () => {},
       publishLanguage: () => {},
       publishSocketDiagnostic: () => {},
-      onRequestClose: (handler: () => Promise<void>) => {
+      onRequestClose: (handler: DesktopCloseRequestHandler) => {
         requestHandler = handler;
         return () => {
           requestHandler = null;
@@ -2281,7 +2283,7 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
       },
     };
 
-    window.openficDesktopHost.onRequestClose!(async () => {
+    window.openficDesktopHost!.onRequestClose!(async () => {
       const confirmed = await requestLeave("all", () => {});
       window.openficDesktopHost?.respondCloseDecision?.({
         confirmed,
@@ -2380,4 +2382,3 @@ test.describe("P1.1: 关闭自动保存后标题失焦不得隐式保存", () =>
     expect(calls).toEqual([{ reason: "auto", revision: 1 }]);
   });
 });
-

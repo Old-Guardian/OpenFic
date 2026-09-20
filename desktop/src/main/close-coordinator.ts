@@ -13,6 +13,8 @@ export interface CloseCoordinator {
   handleWindowClose: (event: { preventDefault: () => void }) => void;
   handleBeforeQuit: (event: { preventDefault: () => void }) => void;
   handleConfirmClose: (request: ConfirmCloseRequest, sender: WebContents) => Promise<void>;
+  handleRendererReady: (sender: WebContents) => void;
+  markRendererNotReady: () => void;
   requestCloseConfirmation: () => void;
   isConfirmed: () => boolean;
   isPending: () => boolean;
@@ -22,9 +24,27 @@ export interface CloseCoordinator {
 export function createCloseCoordinator(options: CloseCoordinatorOptions): CloseCoordinator {
   let isConfirmedToClose = false;
   let isCloseRequestPending = false;
+  let isRendererReady = false;
+  let wasCloseRequestSent = false;
   let isQuitting = false;
 
   const log = options.log ?? (() => undefined);
+
+  function sendPendingCloseRequest(): void {
+    const window = options.getWindow();
+    if (
+      !isCloseRequestPending ||
+      wasCloseRequestSent ||
+      !isRendererReady ||
+      !window ||
+      window.isDestroyed()
+    ) {
+      return;
+    }
+    wasCloseRequestSent = true;
+    window.webContents.send(IpcChannels.requestClose);
+    log("close confirmation requested from window");
+  }
 
   function requestCloseConfirmation(): void {
     const window = options.getWindow();
@@ -45,8 +65,25 @@ export function createCloseCoordinator(options: CloseCoordinatorOptions): CloseC
     if (window.isMinimized()) window.restore();
     window.focus();
     isCloseRequestPending = true;
-    window.webContents.send(IpcChannels.requestClose);
-    log("close confirmation requested from window");
+    wasCloseRequestSent = false;
+    sendPendingCloseRequest();
+  }
+
+  function handleRendererReady(sender: WebContents): void {
+    const window = options.getWindow();
+    if (!window || window.isDestroyed() || sender !== window.webContents) {
+      log("ignored close-handler-ready from unauthorized or destroyed sender");
+      return;
+    }
+    if (isRendererReady) return;
+    isRendererReady = true;
+    sendPendingCloseRequest();
+  }
+
+  function markRendererNotReady(): void {
+    isRendererReady = false;
+    // 渲染器重载会销毁旧监听器；若正在等待确认，就在新渲染器就绪后重放。
+    if (isCloseRequestPending) wasCloseRequestSent = false;
   }
 
   function handleWindowClose(event: { preventDefault: () => void }): void {
@@ -85,6 +122,7 @@ export function createCloseCoordinator(options: CloseCoordinatorOptions): CloseC
     }
 
     isCloseRequestPending = false;
+    wasCloseRequestSent = false;
     if (request.confirmed) {
       log("close confirmed by window: closing window and preparing exit");
       isConfirmedToClose = true;
@@ -103,12 +141,16 @@ export function createCloseCoordinator(options: CloseCoordinatorOptions): CloseC
     handleWindowClose,
     handleBeforeQuit,
     handleConfirmClose,
+    handleRendererReady,
+    markRendererNotReady,
     requestCloseConfirmation,
     isConfirmed: () => isConfirmedToClose,
     isPending: () => isCloseRequestPending,
     reset: () => {
       isConfirmedToClose = false;
       isCloseRequestPending = false;
+      isRendererReady = false;
+      wasCloseRequestSent = false;
       isQuitting = false;
     },
   };

@@ -76,6 +76,34 @@ ipcRenderer.on(IpcChannels.zoomFactorChanged, (_event, zoomFactor: unknown) => {
   applyZoomFactor(zoomFactor, false);
 });
 
+type CloseRequestHandler = () => void | Promise<void>;
+
+const closeRequestHandlers = new Set<CloseRequestHandler>();
+let hasPendingCloseRequest = false;
+
+function invokeCloseRequestHandler(handler: CloseRequestHandler): void {
+  try {
+    void Promise.resolve(handler()).catch(() => undefined);
+  } catch {
+    // 单个处理器失败不应阻塞其他关闭处理器。
+  }
+}
+
+function dispatchCloseRequest(): void {
+  if (closeRequestHandlers.size === 0) {
+    hasPendingCloseRequest = true;
+    return;
+  }
+  hasPendingCloseRequest = false;
+  for (const handler of closeRequestHandlers) {
+    invokeCloseRequestHandler(handler);
+  }
+}
+
+ipcRenderer.on(IpcChannels.requestClose, dispatchCloseRequest);
+// 只有 preload 的持久监听器安装后才告知主进程，避免早期关闭消息丢失。
+ipcRenderer.send(IpcChannels.closeHandlerReady);
+
 const desktopApi = {
   getConfig: (): Promise<DesktopConfig | null> => ipcRenderer.invoke(IpcChannels.getConfig),
   saveConfig: (config: DesktopConfig): Promise<void> =>
@@ -172,10 +200,13 @@ const desktopApi = {
     ipcRenderer.on(IpcChannels.updateState, listener);
     return () => ipcRenderer.off(IpcChannels.updateState, listener);
   },
-  onRequestClose: (handler: () => void): (() => void) => {
-    const listener = () => handler();
-    ipcRenderer.on(IpcChannels.requestClose, listener);
-    return () => ipcRenderer.off(IpcChannels.requestClose, listener);
+  onRequestClose: (handler: CloseRequestHandler): (() => void) => {
+    closeRequestHandlers.add(handler);
+    if (hasPendingCloseRequest) {
+      hasPendingCloseRequest = false;
+      invokeCloseRequestHandler(handler);
+    }
+    return () => closeRequestHandlers.delete(handler);
   },
   confirmClose: (request: ConfirmCloseRequest): Promise<void> =>
     ipcRenderer.invoke(IpcChannels.confirmClose, request),

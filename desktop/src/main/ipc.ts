@@ -196,6 +196,7 @@ export interface IpcContext {
   onConfigSaved: (config: DesktopConfig) => void;
   isBackendRunning: () => boolean;
   stopActiveBackend: () => Promise<void>;
+  onCloseHandlerReady?: (sender: Electron.WebContents) => void;
   onConfirmClose?: (request: ConfirmCloseRequest, sender: Electron.WebContents) => Promise<void> | void;
 }
 
@@ -710,6 +711,9 @@ export function registerIpc(context: IpcContext): void {
   });
   ipcMain.handle(IpcChannels.closeWindow, async () => {
     context.shellWindow()?.close();
+  });
+  ipcMain.on(IpcChannels.closeHandlerReady, (event) => {
+    context.onCloseHandlerReady?.(event.sender);
   });
   ipcMain.handle(IpcChannels.confirmClose, async (event, request: ConfirmCloseRequest) => {
     if (context.onConfirmClose) {

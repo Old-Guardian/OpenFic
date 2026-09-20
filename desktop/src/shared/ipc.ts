@@ -26,6 +26,7 @@ export const IpcChannels = {
   toggleDevTools: "window:toggle-dev-tools",
   closeWindow: "window:close",
   requestClose: "window:request-close",
+  closeHandlerReady: "window:close-handler-ready",
   confirmClose: "window:confirm-close",
   getUpdateState: "update:get-state",
   checkForUpdate: "update:check",

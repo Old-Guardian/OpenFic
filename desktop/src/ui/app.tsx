@@ -226,6 +226,8 @@ export function App() {
   const lastAutoUpdateCheck = useRef<string | null>(null);
   const automaticallyOpenedUpdate = useRef<string | null>(null);
   const startupRequestId = useRef(0);
+  const closeReadyWebview = useRef<FrontendWebviewElement | null>(null);
+  const hasPendingFrontendCloseRequest = useRef(false);
   const activeInstance = config?.instances.find((instance) => instance.id === activeInstanceId) ?? null;
   const deletionInstance = config?.instances.find((instance) => instance.id === deletionInstanceId) ?? null;
   const frontendPartition = activeInstanceId ? `persist:openfic-${activeInstanceId}` : "persist:openfic";
@@ -315,9 +317,40 @@ export function App() {
   useEffect(() => {
     if (!frontendWebview) return;
 
+    const sendPendingCloseRequest = () => {
+      if (
+        !hasPendingFrontendCloseRequest.current ||
+        closeReadyWebview.current !== frontendWebview
+      ) {
+        return;
+      }
+      try {
+        frontendWebview.send("openfic:request-close");
+        hasPendingFrontendCloseRequest.current = false;
+      } catch {
+        // webview 正在重载：保留请求，等新 guest preload 就绪后重放。
+        closeReadyWebview.current = null;
+      }
+    };
+
+    const markCloseHandlerReady = () => {
+      closeReadyWebview.current = frontendWebview;
+      sendPendingCloseRequest();
+    };
+
+    const markCloseHandlerNotReady = () => {
+      if (closeReadyWebview.current === frontendWebview) {
+        closeReadyWebview.current = null;
+      }
+    };
+
     const handleIpcMessage = (event: Event) => {
       const { channel, args } = event as WebviewIpcMessageEvent;
       const payload = args[0];
+      if (channel === "openfic:close-handler-ready") {
+        markCloseHandlerReady();
+        return;
+      }
       if (channel === "openfic:appearance" && isDesktopAppearancePayload(payload)) {
         const appearancePatch: DesktopInstanceAppearance = {
           ...(payload.appearance === undefined ? {} : { appearance: payload.appearance }),
@@ -376,24 +409,39 @@ export function App() {
     };
 
     frontendWebview.addEventListener("ipc-message", handleIpcMessage);
+    frontendWebview.addEventListener("did-start-loading", markCloseHandlerNotReady);
+    frontendWebview.addEventListener("dom-ready", markCloseHandlerReady);
     frontendWebview.addEventListener("did-finish-load", restoreZoomFactor);
+    // guest preload 的首次 ready 消息可能早于 React effect；主动探测可触发再次握手。
+    try {
+      frontendWebview.send("openfic:probe-close-handler");
+    } catch {
+      // dom-ready / guest ready 事件会在稍后完成握手。
+    }
     restoreZoomFactor();
     return () => {
       frontendWebview.removeEventListener("ipc-message", handleIpcMessage);
+      frontendWebview.removeEventListener("did-start-loading", markCloseHandlerNotReady);
+      frontendWebview.removeEventListener("dom-ready", markCloseHandlerReady);
       frontendWebview.removeEventListener("did-finish-load", restoreZoomFactor);
+      markCloseHandlerNotReady();
     };
   }, [activeInstanceId, frontendWebview]);
 
   useEffect(() => {
     const unsubscribe = window.openficDesktop.onRequestClose(() => {
-      if (shellState !== "frontend" || !frontendWebview) {
+      if (shellState !== "frontend") {
         void window.openficDesktop.confirmClose({ confirmed: true });
         return;
       }
+      hasPendingFrontendCloseRequest.current = true;
+      if (!frontendWebview || closeReadyWebview.current !== frontendWebview) return;
       try {
         frontendWebview.send("openfic:request-close");
+        hasPendingFrontendCloseRequest.current = false;
       } catch {
-        void window.openficDesktop.confirmClose({ confirmed: true });
+        // 不把加载中的 webview 当成“无修改”。就绪事件会重放请求。
+        closeReadyWebview.current = null;
       }
     });
     return unsubscribe;

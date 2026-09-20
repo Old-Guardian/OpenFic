@@ -72,7 +72,7 @@ declare global {
       onDataProgress: (handler: (event: DataProgressEvent) => void) => () => void;
       onStartupProgress: (handler: (event: StartupProgressEvent) => void) => () => void;
       onUpdateState: (handler: (state: UpdateState) => void) => () => void;
-      onRequestClose: (handler: () => void) => () => void;
+      onRequestClose: (handler: () => void | Promise<void>) => () => void;
       confirmClose: (request: ConfirmCloseRequest) => Promise<void>;
     };
   }

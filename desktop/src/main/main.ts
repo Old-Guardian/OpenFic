@@ -83,6 +83,10 @@ const closeCoordinator = createCloseCoordinator({
 });
 
 function attachWindowLifecycle(window: BrowserWindow): void {
+  window.webContents.on("did-start-loading", () => {
+    closeCoordinator.markRendererNotReady();
+  });
+
   window.on("close", (event) => {
     closeCoordinator.handleWindowClose(event);
   });
@@ -484,6 +488,7 @@ async function bootstrap(): Promise<void> {
     onConfigSaved,
     isBackendRunning,
     stopActiveBackend,
+    onCloseHandlerReady: (sender) => closeCoordinator.handleRendererReady(sender),
     onConfirmClose: (request, sender) => closeCoordinator.handleConfirmClose(request, sender),
   });
 
