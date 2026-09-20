@@ -235,6 +235,8 @@ function NoteEditorContent({
     },
     discard: async () => {
       autoSave.cancel();
+      // 等待在途保存请求结束，再丢弃剩余修改，避免放行早于请求完成
+      await autoSave.whenIdle();
       await workingCopy.discardWorkingCopy();
       hasChangesRef.current = false;
       setHasChanges(false);

@@ -86,6 +86,10 @@ export class AutoSaveScheduler {
   private lastSavedRevision: number | null = null;
   /** 本实例尚未完成的保存数（含排队等待者），任一大于 0 即对外视为保存中 */
   private pendingSaveCount: number = 0;
+  /** 已放弃修改：阻止后续自动调度与尚未发出的排队保存，直到用户再次编辑 */
+  private isCancelled: boolean = false;
+  /** whenIdle 的等待者，保存全部结束时统一唤醒 */
+  private pendingIdleResolvers: (() => void)[] = [];
   private isDisposed: boolean = false;
 
   constructor(config: AutoSaveSchedulerConfig) {
@@ -114,8 +118,20 @@ export class AutoSaveScheduler {
     }
   }
 
+  private drainPendingIdle() {
+    if (this.pendingSaveCount > 0 || this.pendingIdleResolvers.length === 0) {
+      return;
+    }
+    const resolvers = this.pendingIdleResolvers;
+    this.pendingIdleResolvers = [];
+    for (const resolve of resolvers) {
+      resolve();
+    }
+  }
+
   private canScheduleAutoSave(): boolean {
     if (this.isDisposed) return false;
+    if (this.isCancelled) return false;
     if (!this.config.enabled) return false;
     if (!this.config.hasChanges) return false;
     if (this.config.blockedReason) return false;
@@ -200,8 +216,9 @@ export class AutoSaveScheduler {
       return;
     }
 
-    // 6. 真实草稿变更（dirtyRevision 变更）：重置定时器
+    // 6. 真实草稿变更（dirtyRevision 变更）：视为重新开始编辑，解除放弃状态并重置定时器
     if (nextConfig.dirtyRevision !== prevConfig.dirtyRevision) {
+      this.isCancelled = false;
       if (this.canScheduleAutoSave()) {
         this.startTimer(nextConfig.delayMs);
       } else {
@@ -221,6 +238,11 @@ export class AutoSaveScheduler {
    */
   public async triggerSave(reason: SaveReason = "manual"): Promise<SaveResult> {
     if (this.isDisposed) {
+      return { status: "unchanged" };
+    }
+
+    // 放弃后不得再提交，直到用户再次编辑重置取消标记
+    if (this.isCancelled) {
       return { status: "unchanged" };
     }
 
@@ -265,6 +287,10 @@ export class AutoSaveScheduler {
       if (this.config.blockedReason) {
         return { status: "blocked", reason: this.config.blockedReason };
       }
+      // 排队等待期间用户可能已放弃修改：不得再提交被放弃的内容
+      if (this.isCancelled) {
+        return { status: "unchanged" };
+      }
       // 排队等待期间开关可能被关闭：自动保存不得在等待结束后继续提交新请求。
       // 已发出的请求允许完成，但此任务此前尚未发出，仍受最新开关约束。
       if (reason === "auto" && !this.config.enabled) {
@@ -298,6 +324,7 @@ export class AutoSaveScheduler {
 
     this.pendingSaveCount--;
     this.notifyStateChange();
+    this.drainPendingIdle();
 
     // 保存完成后的排队与调度检查 (Rule 5 & Rule 77)
     if (!this.isDisposed) {
@@ -313,8 +340,23 @@ export class AutoSaveScheduler {
     return result;
   }
 
+  /**
+   * 取消调度，进入放弃状态：清理定时器并阻止尚未发出的排队保存。
+   * 用户再次编辑（updateConfig 检测到 dirtyRevision 变更）时自动解除。
+   */
   public cancel() {
+    this.isCancelled = true;
     this.clearTimer();
+  }
+
+  /** 等待本实例全部保存（含在途与排队）结束。放弃修改前调用，避免提前放行 */
+  public whenIdle(): Promise<void> {
+    if (this.pendingSaveCount === 0) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.pendingIdleResolvers.push(resolve);
+    });
   }
 
   public dispose() {

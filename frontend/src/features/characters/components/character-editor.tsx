@@ -169,6 +169,8 @@ export function CharacterEditor({
     save: async () => autoSave.save("leave"),
     discard: async () => {
       autoSave.cancel();
+      // 等待在途保存请求结束，再恢复基线，避免放行早于请求完成
+      await autoSave.whenIdle();
       if (character) {
         const baseline = lastSavedBaselineRef.current;
         setName(baseline.name);

@@ -411,6 +411,70 @@ test.describe("编辑器共用保存调度器 (T3: F03, F07, F08, F16)", () => {
     ]);
   });
 
+  test("P2.2: 放弃修改等待在途请求结束，且不提交已放弃的内容", async () => {
+    let resolveFirst!: (result: SaveResult) => void;
+    const firstGate = new Promise<SaveResult>((resolve) => {
+      resolveFirst = resolve;
+    });
+
+    const calls: { reason: SaveReason; revision: number }[] = [];
+    const saveAdapter = async (reason: SaveReason, revision: number): Promise<SaveResult> => {
+      calls.push({ reason, revision });
+      if (calls.length === 1) {
+        return firstGate; // 版本 1 保持在途
+      }
+      return { status: "saved", savedRevision: revision };
+    };
+
+    const timer = new VirtualTimer();
+    const baseConfig: AutoSaveSchedulerConfig = {
+      documentKey: "chapter:p2-2",
+      enabled: true,
+      delayMs: 2000,
+      dirtyRevision: 1,
+      hasChanges: true,
+      save: saveAdapter,
+      timers: timer.asTimers(),
+    };
+    const scheduler = new AutoSaveScheduler(baseConfig);
+
+    // 版本 1 的自动保存到期并在途
+    await timer.advanceTime(2000);
+    expect(calls).toEqual([{ reason: "auto", revision: 1 }]);
+
+    // 继续编辑到版本 2，第二次自动保存进入排队
+    scheduler.updateConfig({ ...baseConfig, dirtyRevision: 2 });
+    await timer.advanceTime(2000);
+    expect(calls.length).toBe(1);
+
+    // 用户在慢请求期间放弃修改
+    scheduler.cancel();
+    let idleResolved = false;
+    const idle = scheduler.whenIdle().then(() => {
+      idleResolved = true;
+    });
+
+    // 核心断言 1：在途请求尚未结束时，放弃流程不得放行
+    await flushAsync();
+    expect(idleResolved).toBe(false);
+
+    // 在途请求结束
+    resolveFirst({ status: "saved", savedRevision: 1 });
+    await idle;
+    expect(idleResolved).toBe(true);
+
+    // 核心断言 2：已放弃的排队内容不得提交，也不得额外保存
+    expect(calls).toEqual([{ reason: "auto", revision: 1 }]);
+
+    // 再次编辑解除放弃状态：新的修改可正常自动保存
+    scheduler.updateConfig({ ...baseConfig, dirtyRevision: 3 });
+    await timer.advanceTime(2000);
+    expect(calls).toEqual([
+      { reason: "auto", revision: 1 },
+      { reason: "auto", revision: 3 },
+    ]);
+  });
+
   test("F16: 设置快速操作与无关重渲染：不出现旧设置响应覆盖新状态，不重复/无限推迟保存", async () => {
     const timer = new VirtualTimer();
     const calls: { reason: SaveReason; revision: number }[] = [];
@@ -851,6 +915,69 @@ test.describe("未保存离开保护与会话管理 (T5: 模拟会话保存失�
     expect(saveAttempts).toBe(2);
     expect(allowed).toBe(true);
     expect(actionExecuted).toBe(true);
+  });
+
+  test("P2.2: 放弃修改时离开确认等待在途保存请求完成", async () => {
+    let resolveInFlight!: (result: SaveResult) => void;
+    const gate = new Promise<SaveResult>((resolve) => {
+      resolveInFlight = resolve;
+    });
+    const calls: number[] = [];
+
+    const scheduler = new AutoSaveScheduler({
+      documentKey: "note:p2-2-int",
+      enabled: true,
+      delayMs: 3000,
+      dirtyRevision: 1,
+      hasChanges: true,
+      save: async (_reason, rev) => {
+        calls.push(rev);
+        return gate;
+      },
+    });
+
+    // 版本 1 的保存已在途
+    void scheduler.triggerSave("auto");
+    expect(calls).toEqual([1]);
+
+    let discardCompleted = false;
+    let navigated = false;
+
+    // 模拟真实 discard 接线：cancel → whenIdle → 恢复基线
+    useEditorSessionStore.getState().registerSession({
+      documentKey: "note:p2-2-int",
+      entityType: "note",
+      entityId: "p2-2-int",
+      title: "测试笔记",
+      isDirty: true,
+      isSaving: true,
+      save: async () => scheduler.triggerSave("leave"),
+      discard: async () => {
+        scheduler.cancel();
+        await scheduler.whenIdle();
+        discardCompleted = true;
+      },
+    });
+
+    const leavePromise = requestLeave("all", () => {
+      navigated = true;
+    });
+    useEditorSessionStore.getState().chooseDecision("discard");
+
+    // 核心断言：在途请求未结束前，discard 与放行都必须等待
+    await flushAsync();
+    expect(discardCompleted).toBe(false);
+    expect(navigated).toBe(false);
+
+    // 在途请求完成
+    resolveInFlight({ status: "saved", savedRevision: 1 });
+    const allowed = await leavePromise;
+
+    expect(discardCompleted).toBe(true);
+    expect(allowed).toBe(true);
+    expect(navigated).toBe(true);
+    // 不得为“放弃”额外提交被放弃的内容
+    expect(calls).toEqual([1]);
   });
 
   test("模拟会话保存被锁定阻断不放行（验收门槛）", async () => {
