@@ -41,8 +41,10 @@ import {
   type WritingWorkingCopyController,
 } from "../hooks/use-writing-working-copy";
 import { createChapterEditorDraft, isChapterEditorDraftDirty } from "../lib/chapter-editor-draft";
+import { discardWritingEditorChanges } from "../lib/discard-writing-editor-changes";
 import { createEditorExtensions } from "../lib/editor-config";
 import {
+  classifyWritingDraftChange,
   getNextWritingWorkingCopyTimestamp,
   isRemoteWritingEntityNewer,
 } from "../lib/writing-working-copy";
@@ -234,11 +236,15 @@ function ChapterEditorContent({
         title: nextTitle,
         content: htmlToNewlines(nextHtmlContent),
       });
-      const isDirty = isChapterEditorDraftDirty(lastSavedDraftRef.current, nextDraft);
+      const { didChange, isDirty } = classifyWritingDraftChange(
+        latestDraftRef.current,
+        nextDraft,
+        lastSavedDraftRef.current,
+      );
       latestDraftRef.current = nextDraft;
       hasChangesRef.current = isDirty;
       setHasChanges(isDirty);
-      if (isDirty) {
+      if (didChange) {
         setDirtyRevision((prev) => prev + 1);
         persistDraft(nextDraft);
       }
@@ -430,12 +436,14 @@ function ChapterEditorContent({
       return autoSave.save("leave");
     },
     discard: async () => {
-      autoSave.cancel();
-      // 等待在途保存请求结束，再丢弃剩余修改，避免放行早于请求完成
-      await autoSave.whenIdle();
-      await workingCopy.discardWorkingCopy();
-      hasChangesRef.current = false;
-      setHasChanges(false);
+      await discardWritingEditorChanges({
+        autoSave,
+        discardWorkingCopy: workingCopy.discardWorkingCopy,
+        onDiscarded: () => {
+          hasChangesRef.current = false;
+          setHasChanges(false);
+        },
+      });
     },
   });
 
@@ -568,11 +576,15 @@ function ChapterEditorContent({
         title: newTitle,
         content: latestDraftRef.current.content,
       });
+      const { didChange, isDirty } = classifyWritingDraftChange(
+        latestDraftRef.current,
+        draft,
+        lastSavedDraftRef.current,
+      );
       latestDraftRef.current = draft;
-      const isDirty = draft.title !== lastSavedDraftRef.current.title;
       hasChangesRef.current = isDirty;
       setHasChanges(isDirty);
-      if (isDirty) {
+      if (didChange) {
         setDirtyRevision((prev) => prev + 1);
         persistDraft(draft);
       }

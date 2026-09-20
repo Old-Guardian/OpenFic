@@ -349,6 +349,20 @@ export class AutoSaveScheduler {
     this.clearTimer();
   }
 
+  /**
+   * 恢复被 cancel 暂停的保存能力。
+   *
+   * 放弃修改需要先 cancel，避免在等待 IndexedDB 清理时继续提交；如果清理失败，
+   * 调用方必须 resume，让同一弹窗中的“保存并离开”和后续手动保存仍能工作。
+   */
+  public resume() {
+    if (this.isDisposed || !this.isCancelled) return;
+    this.isCancelled = false;
+    if (this.canScheduleAutoSave()) {
+      this.startTimer(this.config.delayMs);
+    }
+  }
+
   /** 等待本实例全部保存（含在途与排队）结束。放弃修改前调用，避免提前放行 */
   public whenIdle(): Promise<void> {
     if (this.pendingSaveCount === 0) {

@@ -24,6 +24,11 @@ import {
   useEditorSessionStore,
   type EditorSessionRegistration,
 } from "../src/features/editor-session";
+import { discardWritingEditorChanges } from "../src/features/writing/lib/discard-writing-editor-changes";
+import {
+  classifyWritingDraftChange,
+  type WritingWorkingCopyDraft,
+} from "../src/features/writing/lib/writing-working-copy";
 import { _resetTabsStoreForTest, useTabsStore } from "../src/features/writing/store/use-tabs-store";
 
 test.describe("编辑器自动保存设置契约与转换 (T1-T2)", () => {
@@ -1080,6 +1085,193 @@ test.describe("未保存离开保护与会话管理 (T5: 模拟会话保存失�
     expect(discardAttempts).toBe(2);
     expect(allowed).toBe(true);
     expect(actionExecuted).toBe(true);
+  });
+
+  test("P1: 放弃清理失败后改选保存，真实调度器仍会写入再放行", async () => {
+    const store = useEditorSessionStore.getState();
+    let writes = 0;
+    let leaves = 0;
+    const scheduler = new AutoSaveScheduler({
+      documentKey: "note:p1-discard-save",
+      enabled: false,
+      delayMs: 3000,
+      dirtyRevision: 1,
+      hasChanges: true,
+      save: async (_reason, revision) => {
+        writes++;
+        return { status: "saved", savedRevision: revision };
+      },
+    });
+
+    store.registerSession({
+      documentKey: "note:p1-discard-save",
+      entityType: "note",
+      entityId: "p1-discard-save",
+      title: "放弃失败的笔记",
+      isDirty: true,
+      isSaving: false,
+      save: () => scheduler.triggerSave("leave"),
+      discard: () =>
+        discardWritingEditorChanges({
+          autoSave: scheduler,
+          discardWorkingCopy: async () => {
+            throw new Error("IndexedDB deletion failed");
+          },
+          onDiscarded: () => {},
+        }),
+    });
+
+    const leavePromise = requestLeave("all", () => {
+      leaves++;
+    });
+    store.chooseDecision("discard");
+    await flushAsync();
+
+    expect(writes).toBe(0);
+    expect(leaves).toBe(0);
+    expect(useEditorSessionStore.getState().dialogState?.errorMessage).toContain(
+      "IndexedDB deletion failed",
+    );
+
+    store.chooseDecision("save");
+    const allowed = await leavePromise;
+
+    expect(allowed).toBe(true);
+    expect(writes).toBe(1);
+    expect(leaves).toBe(1);
+  });
+
+  test("P1: 放弃清理失败后取消离开，手动保存仍可写入", async () => {
+    const store = useEditorSessionStore.getState();
+    let writes = 0;
+    const scheduler = new AutoSaveScheduler({
+      documentKey: "chapter:p1-discard-cancel",
+      enabled: false,
+      delayMs: 3000,
+      dirtyRevision: 1,
+      hasChanges: true,
+      save: async (_reason, revision) => {
+        writes++;
+        return { status: "saved", savedRevision: revision };
+      },
+    });
+
+    store.registerSession({
+      documentKey: "chapter:p1-discard-cancel",
+      entityType: "chapter",
+      entityId: "p1-discard-cancel",
+      title: "放弃失败的章节",
+      isDirty: true,
+      isSaving: false,
+      save: () => scheduler.triggerSave("leave"),
+      discard: () =>
+        discardWritingEditorChanges({
+          autoSave: scheduler,
+          discardWorkingCopy: async () => {
+            throw new Error("IndexedDB deletion failed");
+          },
+          onDiscarded: () => {},
+        }),
+    });
+
+    const leavePromise = requestLeave("all", () => {});
+    store.chooseDecision("discard");
+    await flushAsync();
+    store.chooseDecision("cancel");
+
+    expect(await leavePromise).toBe(false);
+    expect(await scheduler.triggerSave("manual")).toEqual({
+      status: "saved",
+      savedRevision: 1,
+    });
+    expect(writes).toBe(1);
+  });
+
+  test("P1: 慢保存 B 时改回 A，会推进版本、保留本地副本并在离开前保存 A", async () => {
+    const baseline: WritingWorkingCopyDraft = { title: "title", content: "A" };
+    const edited: WritingWorkingCopyDraft = { title: "title", content: "B" };
+    let current = baseline;
+    let saved = baseline;
+    let revision = 0;
+    let isDirty = false;
+    const persistedDrafts: WritingWorkingCopyDraft[] = [];
+    const writes: { draft: WritingWorkingCopyDraft; revision: number }[] = [];
+    let resolveFirstSave!: () => void;
+    const firstSaveGate = new Promise<void>((resolve) => {
+      resolveFirstSave = resolve;
+    });
+    let scheduler!: AutoSaveScheduler;
+
+    const config = (): AutoSaveSchedulerConfig => ({
+      documentKey: "note:p1-return-to-baseline",
+      enabled: false,
+      delayMs: 3000,
+      dirtyRevision: revision,
+      hasChanges: isDirty,
+      save: async (_reason, targetRevision) => {
+        const draftToSave = { ...current };
+        writes.push({ draft: draftToSave, revision: targetRevision });
+        if (writes.length === 1) {
+          await firstSaveGate;
+        }
+        saved = draftToSave;
+        isDirty = classifyWritingDraftChange(current, current, saved).isDirty;
+        scheduler.updateConfig(config());
+        return { status: "saved", savedRevision: targetRevision };
+      },
+    });
+
+    const edit = (next: WritingWorkingCopyDraft) => {
+      const change = classifyWritingDraftChange(current, next, saved);
+      current = next;
+      isDirty = change.isDirty;
+      if (change.didChange) {
+        revision++;
+        persistedDrafts.push({ ...next });
+      }
+      scheduler.updateConfig(config());
+    };
+
+    scheduler = new AutoSaveScheduler(config());
+    edit(edited);
+    const firstSave = scheduler.triggerSave("manual");
+    expect(writes).toEqual([{ draft: edited, revision: 1 }]);
+
+    // 在 B 的请求返回前改回旧基线 A：isDirty=false，但编辑版本必须变为 2。
+    edit(baseline);
+    expect(revision).toBe(2);
+    expect(isDirty).toBe(false);
+    expect(persistedDrafts).toEqual([edited, baseline]);
+
+    resolveFirstSave();
+    await firstSave;
+    expect(saved).toEqual(edited);
+    expect(isDirty).toBe(true);
+
+    let leaves = 0;
+    useEditorSessionStore.getState().registerSession({
+      documentKey: "note:p1-return-to-baseline",
+      entityType: "note",
+      entityId: "p1-return-to-baseline",
+      title: "回到基线",
+      isDirty: true,
+      isSaving: false,
+      getIsDirty: () => isDirty,
+      save: () => scheduler.triggerSave("leave"),
+    });
+    const leavePromise = requestLeave("all", () => {
+      leaves++;
+    });
+    useEditorSessionStore.getState().chooseDecision("save");
+
+    expect(await leavePromise).toBe(true);
+    expect(writes).toEqual([
+      { draft: edited, revision: 1 },
+      { draft: baseline, revision: 2 },
+    ]);
+    expect(saved).toEqual(baseline);
+    expect(isDirty).toBe(false);
+    expect(leaves).toBe(1);
   });
 
   test("模拟会话保存被锁定阻断不放行（验收门槛）", async () => {
@@ -2188,5 +2380,4 @@ test.describe("P1.1: 关闭自动保存后标题失焦不得隐式保存", () =>
     expect(calls).toEqual([{ reason: "auto", revision: 1 }]);
   });
 });
-
 

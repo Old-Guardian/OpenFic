@@ -27,8 +27,10 @@ import {
   type WritingDraft,
   type WritingWorkingCopyController,
 } from "../hooks/use-writing-working-copy";
+import { discardWritingEditorChanges } from "../lib/discard-writing-editor-changes";
 import {
   areWritingWorkingCopyDraftsEqual,
+  classifyWritingDraftChange,
   getNextWritingWorkingCopyTimestamp,
   isRemoteWritingEntityNewer,
 } from "../lib/writing-working-copy";
@@ -234,12 +236,14 @@ function NoteEditorContent({
       return autoSave.save("leave");
     },
     discard: async () => {
-      autoSave.cancel();
-      // 等待在途保存请求结束，再丢弃剩余修改，避免放行早于请求完成
-      await autoSave.whenIdle();
-      await workingCopy.discardWorkingCopy();
-      hasChangesRef.current = false;
-      setHasChanges(false);
+      await discardWritingEditorChanges({
+        autoSave,
+        discardWorkingCopy: workingCopy.discardWorkingCopy,
+        onDiscarded: () => {
+          hasChangesRef.current = false;
+          setHasChanges(false);
+        },
+      });
     },
   });
 
@@ -285,11 +289,15 @@ function NoteEditorContent({
     setTitle(newTitle);
     titleRef.current = newTitle;
     const draft = { title: newTitle, content: savedContentRef.current };
+    const { didChange, isDirty } = classifyWritingDraftChange(
+      latestDraftRef.current,
+      draft,
+      lastSavedDraftRef.current,
+    );
     latestDraftRef.current = draft;
-    const isDirty = !areWritingWorkingCopyDraftsEqual(draft, lastSavedDraftRef.current);
     hasChangesRef.current = isDirty;
     setHasChanges(isDirty);
-    if (isDirty) {
+    if (didChange) {
       setDirtyRevision((r) => r + 1);
       persistDraft(draft);
     }
@@ -300,17 +308,21 @@ function NoteEditorContent({
     (markdown: string) => {
       savedContentRef.current = markdown;
       setEditorContent(markdown);
-      const draft = { title, content: markdown };
+      const draft = { title: titleRef.current, content: markdown };
+      const { didChange, isDirty } = classifyWritingDraftChange(
+        latestDraftRef.current,
+        draft,
+        lastSavedDraftRef.current,
+      );
       latestDraftRef.current = draft;
-      const isDirty = !areWritingWorkingCopyDraftsEqual(draft, lastSavedDraftRef.current);
       hasChangesRef.current = isDirty;
       setHasChanges(isDirty);
-      if (isDirty) {
+      if (didChange) {
         setDirtyRevision((r) => r + 1);
         persistDraft(draft);
       }
     },
-    [persistDraft, title],
+    [persistDraft],
   );
 
   const handleScrollPositionChange = useCallback(

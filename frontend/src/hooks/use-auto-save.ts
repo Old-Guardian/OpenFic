@@ -47,6 +47,8 @@ export interface UseAutoSaveReturn {
   save: (reason?: SaveReason) => Promise<SaveResult>;
   /** 取消当前待执行的自动保存定时器 */
   cancel: () => void;
+  /** 放弃清理失败后，恢复被 cancel 暂停的保存能力 */
+  resume: () => void;
   /** 等待当前在途与排队的保存全部结束（放弃修改前调用） */
   whenIdle: () => Promise<void>;
   /** 是否正在执行保存请求 */
@@ -125,6 +127,10 @@ export function useAutoSave({
     schedulerRef.current?.cancel();
   }, []);
 
+  const resume = useCallback(() => {
+    schedulerRef.current?.resume();
+  }, []);
+
   const whenIdle = useCallback(() => {
     return schedulerRef.current?.whenIdle() ?? Promise.resolve();
   }, []);
@@ -132,6 +138,7 @@ export function useAutoSave({
   return {
     save: triggerSave,
     cancel,
+    resume,
     whenIdle,
     isSaving: state.isSaving,
     lastSavedRevision: state.lastSavedRevision,

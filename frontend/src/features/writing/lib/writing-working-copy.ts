@@ -59,6 +59,23 @@ export function areWritingWorkingCopyDraftsEqual(
   return left.title === right.title && left.content === right.content;
 }
 
+/**
+ * 同时判定“草稿真的发生了编辑”和“草稿相对已保存基线为脏”。
+ *
+ * 两者不能合并：在途保存 B 时改回旧基线 A，相对旧基线虽然是 clean，
+ * 仍然是一次新编辑，必须推进 revision 并持久化最新草稿。
+ */
+export function classifyWritingDraftChange(
+  previous: WritingWorkingCopyDraft,
+  next: WritingWorkingCopyDraft,
+  saved: WritingWorkingCopyDraft,
+): { didChange: boolean; isDirty: boolean } {
+  return {
+    didChange: !areWritingWorkingCopyDraftsEqual(previous, next),
+    isDirty: !areWritingWorkingCopyDraftsEqual(saved, next),
+  };
+}
+
 export function resolveWritingWorkingCopy(
   remote: RemoteWritingEntity,
   workingCopy: LocalWritingWorkingCopy | null,
