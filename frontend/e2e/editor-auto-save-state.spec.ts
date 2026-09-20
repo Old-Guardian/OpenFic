@@ -620,15 +620,180 @@ test.describe("未保存离开保护与会话管理 (T5: 模拟会话保存失�
 
     // 用户在弹窗中选择“保存并离开”
     useEditorSessionStore.getState().chooseDecision("save");
+    await flushAsync();
 
-    const allowed = await leavePromise;
     // 验收门槛要求：模拟会话保存失败时绝不得放行，留在原处
-    expect(allowed).toBe(false);
     expect(actionExecuted).toBe(false);
 
-    // 弹窗状态应记录错误信息
+    // 弹窗状态应记录错误信息并保持可重试（修复 P1.3 后不再立刻返回 false）
     const currentDialog = useEditorSessionStore.getState().dialogState;
+    expect(currentDialog?.isOpen).toBe(true);
     expect(currentDialog?.errorMessage).toContain("网络超时或后端数据库写入失败");
+
+    // 用户选择取消离开：仍然不放行
+    useEditorSessionStore.getState().chooseDecision("cancel");
+    const allowed = await leavePromise;
+    expect(allowed).toBe(false);
+    expect(actionExecuted).toBe(false);
+  });
+
+  test("P1.3: 保存失败后弹窗保持可重试，重试成功/放弃/取消均不卡住", async () => {
+    const store = useEditorSessionStore.getState();
+    let saveAttempts = 0;
+    let discardCalled = false;
+    let actionExecuted = false;
+
+    store.registerSession({
+      documentKey: "chapter:p1-3-retry",
+      entityType: "chapter",
+      entityId: "p1-3-retry",
+      title: "首次保存失败的章节",
+      isDirty: true,
+      isSaving: false,
+      save: async () => {
+        saveAttempts++;
+        // 第一次失败，第二次重试成功
+        if (saveAttempts === 1) {
+          return { status: "failed", error: new Error("网络断开，写入失败") };
+        }
+        return { status: "saved", savedRevision: 2 };
+      },
+      discard: () => {
+        discardCalled = true;
+      },
+    });
+
+    const leavePromise = requestLeave("all", () => {
+      actionExecuted = true;
+    });
+
+    // 第一次选择“保存并离开”：失败，不得放行，弹窗保留错误
+    store.chooseDecision("save");
+    await flushAsync();
+    expect(actionExecuted).toBe(false);
+
+    const afterFailure = useEditorSessionStore.getState().dialogState;
+    expect(afterFailure?.isOpen).toBe(true);
+    expect(afterFailure?.isProcessing).toBe(false);
+    expect(afterFailure?.errorMessage).toContain("网络断开");
+    expect(saveAttempts).toBe(1);
+
+    // 同一弹窗再次选择“保存并离开”：必须能被处理（修复前 resolve 已清空，无人消费）
+    store.chooseDecision("save");
+    const allowed = await leavePromise;
+
+    expect(saveAttempts).toBe(2);
+    expect(allowed).toBe(true);
+    expect(actionExecuted).toBe(true);
+    expect(useEditorSessionStore.getState().dialogState).toBeNull();
+    expect(discardCalled).toBe(false);
+  });
+
+  test("P1.3: 保存失败后再次放弃修改可以正常放行", async () => {
+    const store = useEditorSessionStore.getState();
+    let discardCalled = false;
+    let actionExecuted = false;
+
+    store.registerSession({
+      documentKey: "chapter:p1-3-discard",
+      entityType: "chapter",
+      entityId: "p1-3-discard",
+      title: "保存失败后放弃的章节",
+      isDirty: true,
+      isSaving: false,
+      save: async () => {
+        return { status: "failed", error: new Error("后端写入失败") };
+      },
+      discard: () => {
+        discardCalled = true;
+      },
+    });
+
+    const leavePromise = requestLeave("all", () => {
+      actionExecuted = true;
+    });
+
+    store.chooseDecision("save");
+    await flushAsync();
+    expect(actionExecuted).toBe(false);
+    expect(store.dialogState ?? useEditorSessionStore.getState().dialogState?.isOpen).toBeTruthy();
+
+    // 失败后改选“放弃修改”：必须能被处理并放行
+    store.chooseDecision("discard");
+    const allowed = await leavePromise;
+
+    expect(allowed).toBe(true);
+    expect(discardCalled).toBe(true);
+    expect(actionExecuted).toBe(true);
+  });
+
+  test("P1.3: 保存失败后取消离开，弹窗关闭且不卡住等待者", async () => {
+    const store = useEditorSessionStore.getState();
+    let actionExecuted = false;
+
+    store.registerSession({
+      documentKey: "chapter:p1-3-cancel",
+      entityType: "chapter",
+      entityId: "p1-3-cancel",
+      title: "保存失败后取消的章节",
+      isDirty: true,
+      isSaving: false,
+      save: async () => ({ status: "failed", error: new Error("写入失败") }),
+    });
+
+    const leavePromise = requestLeave("all", () => {
+      actionExecuted = true;
+    });
+
+    store.chooseDecision("save");
+    await flushAsync();
+    expect(actionExecuted).toBe(false);
+
+    // 失败后取消：弹窗关闭，不放行
+    store.chooseDecision("cancel");
+    const allowed = await leavePromise;
+
+    expect(allowed).toBe(false);
+    expect(actionExecuted).toBe(false);
+    expect(useEditorSessionStore.getState().dialogState).toBeNull();
+  });
+
+  test("P1.3: blocked 返回后弹窗仍可重试并放行", async () => {
+    const store = useEditorSessionStore.getState();
+    let saveAttempts = 0;
+    let actionExecuted = false;
+
+    store.registerSession({
+      documentKey: "chapter:p1-3-blocked",
+      entityType: "chapter",
+      entityId: "p1-3-blocked",
+      title: "被锁定后解锁的章节",
+      isDirty: true,
+      isSaving: false,
+      save: async () => {
+        saveAttempts++;
+        if (saveAttempts === 1) {
+          return { status: "blocked", reason: "文档被 Agent 锁定" };
+        }
+        return { status: "saved", savedRevision: 2 };
+      },
+    });
+
+    const leavePromise = requestLeave("all", () => {
+      actionExecuted = true;
+    });
+
+    store.chooseDecision("save");
+    await flushAsync();
+    expect(actionExecuted).toBe(false);
+    expect(useEditorSessionStore.getState().dialogState?.errorMessage).toContain("Agent 锁定");
+
+    store.chooseDecision("save");
+    const allowed = await leavePromise;
+
+    expect(saveAttempts).toBe(2);
+    expect(allowed).toBe(true);
+    expect(actionExecuted).toBe(true);
   });
 
   test("模拟会话保存被锁定阻断不放行（验收门槛）", async () => {
@@ -654,13 +819,16 @@ test.describe("未保存离开保护与会话管理 (T5: 模拟会话保存失�
 
     // 用户选择“保存并离开”
     useEditorSessionStore.getState().chooseDecision("save");
+    await flushAsync();
 
+    expect(actionExecuted).toBe(false);
+    expect(useEditorSessionStore.getState().dialogState?.errorMessage).toContain("文档被 Agent 锁定");
+
+    // 锁定阻断后取消离开：不放行
+    useEditorSessionStore.getState().chooseDecision("cancel");
     const allowed = await leavePromise;
     expect(allowed).toBe(false);
     expect(actionExecuted).toBe(false);
-
-    const currentDialog = useEditorSessionStore.getState().dialogState;
-    expect(currentDialog?.errorMessage).toContain("文档被 Agent 锁定");
   });
 
   test("会话保存成功正常放行（验收门槛）", async () => {
@@ -1461,13 +1629,17 @@ test.describe("桌面端退出协调 (T8: 主进程/preload/前端退出确认�
 
     // 用户选择保存
     store.chooseDecision("save");
-    await closePromise;
+    await flushAsync();
 
-    // 核心断言：保存失败不能放行退出，必须返回 false
-    expect(capturedDecision).toEqual({ confirmed: false, reason: "cancelled_or_failed" });
-    // 弹窗中应显示具体失败原因
+    // 核心断言：保存失败不能放行退出，弹窗保留错误原因，等待用户决定
+    expect(capturedDecision).toBeNull();
     const currentDialog = useEditorSessionStore.getState().dialogState;
     expect(currentDialog?.errorMessage).toContain("网络断开，写入数据库超时");
+
+    // 用户在报错弹窗中取消退出：此时才以 { confirmed: false } 返回
+    store.chooseDecision("cancel");
+    await closePromise;
+    expect(capturedDecision).toEqual({ confirmed: false, reason: "cancelled_or_failed" });
 
     delete window.openficDesktopHost;
   });

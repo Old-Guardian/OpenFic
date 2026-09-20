@@ -28,5 +28,4 @@ export interface LeaveConfirmDialogState {
   documents: EditorSessionRegistration[];
   isProcessing: boolean;
   errorMessage: string | null;
-  resolve: ((decision: LeaveDecision) => void) | null;
 }

@@ -20,8 +20,10 @@ interface EditorSessionStoreState {
   setNavigationBypassed: (bypassed: boolean) => void;
   consumeNavigationBypass: () => boolean;
 
-  openConfirmDialog: (documents: EditorSessionRegistration[]) => Promise<LeaveDecision>;
+  openConfirmDialog: (documents: EditorSessionRegistration[]) => void;
   chooseDecision: (decision: LeaveDecision) => void;
+  /** 等待用户在当前弹窗中的下一次决策；弹窗未打开时返回 null */
+  waitForDecision: () => Promise<LeaveDecision | null>;
   closeConfirmDialog: () => void;
   setDialogProcessing: (isProcessing: boolean, errorMessage?: string | null) => void;
 }
@@ -93,41 +95,40 @@ export const useEditorSessionStore = create<EditorSessionStoreState>((set, get) 
   },
 
   openConfirmDialog: (documents: EditorSessionRegistration[]) => {
-    return new Promise<LeaveDecision>((resolve) => {
-      set({
-        dialogState: {
-          isOpen: true,
-          documents,
-          isProcessing: false,
-          errorMessage: null,
-          resolve,
-        },
-      });
+    set({
+      dialogState: {
+        isOpen: true,
+        documents,
+        isProcessing: false,
+        errorMessage: null,
+      },
     });
   },
 
   chooseDecision: (decision: LeaveDecision) => {
-    const { dialogState } = get();
-    if (dialogState?.resolve) {
-      dialogState.resolve(decision);
+    const pending = decisionResolvers.shift();
+    if (pending) {
+      pending(decision);
+      return;
     }
+    // 没有等待者（不应发生）：取消时直接关闭，其余保持原状等待重试
     if (decision === "cancel") {
       set({ dialogState: null });
-    } else {
-      set((state) => {
-        if (!state.dialogState) return state;
-        return {
-          dialogState: {
-            ...state.dialogState,
-            isProcessing: true,
-            resolve: null,
-          },
-        };
-      });
     }
   },
 
+  waitForDecision: () => {
+    const { dialogState } = get();
+    if (!dialogState?.isOpen) {
+      return Promise.resolve(null);
+    }
+    return new Promise<LeaveDecision | null>((resolve) => {
+      decisionResolvers.push(resolve);
+    });
+  },
+
   closeConfirmDialog: () => {
+    decisionResolvers.length = 0;
     set({ dialogState: null });
   },
 
@@ -146,6 +147,12 @@ export const useEditorSessionStore = create<EditorSessionStoreState>((set, get) 
 }));
 
 let leaveInProgress = false;
+
+/**
+ * 待决决策的等待者队列。每次 waitForDecision 入队，chooseDecision 出队唤醒。
+ * 失败后弹窗保持打开，用户再次点击会产生新的等待者，形成可重试的决策循环。
+ */
+const decisionResolvers: ((decision: LeaveDecision | null) => void)[] = [];
 
 /**
  * 请求离开当前文档或视图。
@@ -176,67 +183,74 @@ export async function requestLeave(
 
   leaveInProgress = true;
   try {
-    const decision = await store.openConfirmDialog(dirtyDocuments);
+    store.openConfirmDialog(dirtyDocuments);
 
-    if (decision === "cancel") {
-      store.closeConfirmDialog();
-      return false;
-    }
+    // 决策循环：覆盖失败后的重试、放弃与取消，弹窗始终有有效的决策消费者。
+    while (true) {
+      const decision = await store.waitForDecision();
+      if (decision === null || decision === "cancel") {
+        store.closeConfirmDialog();
+        return false;
+      }
 
-    if (decision === "save") {
-      store.setDialogProcessing(true, null);
-      for (const doc of dirtyDocuments) {
-        try {
-          const result = await doc.save();
-          if (result.status === "failed" || result.status === "blocked") {
-            const reason =
-              result.status === "blocked"
-                ? result.reason
-                : result.error instanceof Error
-                  ? result.error.message
-                  : i18n.t("editorSession.saveFailed");
-            store.setDialogProcessing(false, reason);
-            return false;
+      if (decision === "save") {
+        store.setDialogProcessing(true, null);
+        let failureReason: string | null = null;
+        for (const doc of dirtyDocuments) {
+          try {
+            const result = await doc.save();
+            if (result.status === "failed" || result.status === "blocked") {
+              failureReason =
+                result.status === "blocked"
+                  ? result.reason
+                  : result.error instanceof Error
+                    ? result.error.message
+                    : i18n.t("editorSession.saveFailed");
+              break;
+            }
+          } catch (error) {
+            failureReason =
+              error instanceof Error ? error.message : i18n.t("editorSession.saveFailed");
+            break;
           }
-        } catch (error) {
-          const reason =
-            error instanceof Error ? error.message : i18n.t("editorSession.saveFailed");
-          store.setDialogProcessing(false, reason);
-          return false;
         }
-      }
 
-      store.closeConfirmDialog();
-      store.setNavigationBypassed(true);
-      try {
-        await action();
-        return true;
-      } finally {
-        store.setNavigationBypassed(false);
-      }
-    }
+        if (failureReason !== null) {
+          // 保留错误弹窗，恢复按钮，等待用户重试或放弃
+          store.setDialogProcessing(false, failureReason);
+          continue;
+        }
 
-    if (decision === "discard") {
-      store.setDialogProcessing(true, null);
-      for (const doc of dirtyDocuments) {
+        store.closeConfirmDialog();
+        store.setNavigationBypassed(true);
         try {
-          await doc.discard?.();
-        } catch (error) {
-          console.error("Failed to discard editor session changes:", doc.documentKey, error);
+          await action();
+          return true;
+        } finally {
+          store.setNavigationBypassed(false);
         }
       }
 
-      store.closeConfirmDialog();
-      store.setNavigationBypassed(true);
-      try {
-        await action();
-        return true;
-      } finally {
-        store.setNavigationBypassed(false);
+      if (decision === "discard") {
+        store.setDialogProcessing(true, null);
+        for (const doc of dirtyDocuments) {
+          try {
+            await doc.discard?.();
+          } catch (error) {
+            console.error("Failed to discard editor session changes:", doc.documentKey, error);
+          }
+        }
+
+        store.closeConfirmDialog();
+        store.setNavigationBypassed(true);
+        try {
+          await action();
+          return true;
+        } finally {
+          store.setNavigationBypassed(false);
+        }
       }
     }
-
-    return false;
   } finally {
     leaveInProgress = false;
   }
@@ -245,6 +259,7 @@ export async function requestLeave(
 /** 供测试重置 store 状态 */
 export function _resetEditorSessionStoreForTest() {
   leaveInProgress = false;
+  decisionResolvers.length = 0;
   useEditorSessionStore.setState({
     sessions: new Map(),
     dialogState: null,
