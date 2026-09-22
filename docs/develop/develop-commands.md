@@ -8,5 +8,6 @@ uv run uvicorn app.main:app --port 8000 --loop app.cli:_windows_selector_loop_fa
 2. 启动前端：
 
 ```shell
+cd frontend
 pnpm dev
 ```
