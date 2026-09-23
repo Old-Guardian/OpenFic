@@ -70,6 +70,15 @@ export function useAutoSave({
 }: UseAutoSaveOptions): UseAutoSaveReturn {
   const saveRef = useRef(save);
   saveRef.current = save;
+  const configRef = useRef({
+    documentKey,
+    enabled,
+    delayMs,
+    dirtyRevision,
+    hasChanges,
+    blockedReason,
+  });
+  configRef.current = { documentKey, enabled, delayMs, dirtyRevision, hasChanges, blockedReason };
 
   const [state, setState] = useState<AutoSaveSchedulerState>({
     isSaving: false,
@@ -78,25 +87,39 @@ export function useAutoSave({
   });
 
   const schedulerRef = useRef<AutoSaveScheduler | null>(null);
-
-  if (schedulerRef.current === null) {
-    const initialConfig: AutoSaveSchedulerConfig = {
-      documentKey,
-      enabled,
-      delayMs,
-      dirtyRevision,
-      hasChanges,
-      blockedReason,
-      save: (reason, rev) => saveRef.current(reason, rev),
-      onStateChange: (nextState) => {
-        setState(nextState);
-      },
-    };
-    schedulerRef.current = new AutoSaveScheduler(initialConfig);
-  }
+  const applyState = useCallback((nextState: AutoSaveSchedulerState) => {
+    setState((previous) =>
+      previous.isSaving === nextState.isSaving &&
+      previous.lastSavedRevision === nextState.lastSavedRevision &&
+      previous.isScheduled === nextState.isScheduled
+        ? previous
+        : nextState,
+    );
+  }, []);
 
   useEffect(() => {
-    schedulerRef.current?.updateConfig({
+    let scheduler: AutoSaveScheduler;
+    const initialConfig: AutoSaveSchedulerConfig = {
+      ...configRef.current,
+      save: (reason, rev) => saveRef.current(reason, rev),
+      onStateChange: (nextState) => {
+        if (schedulerRef.current === scheduler) applyState(nextState);
+      },
+    };
+    scheduler = new AutoSaveScheduler(initialConfig);
+    schedulerRef.current = scheduler;
+    applyState(scheduler.getState());
+
+    return () => {
+      if (schedulerRef.current === scheduler) schedulerRef.current = null;
+      scheduler.dispose();
+    };
+  }, [applyState]);
+
+  useEffect(() => {
+    const scheduler = schedulerRef.current;
+    if (!scheduler) return;
+    scheduler.updateConfig({
       documentKey,
       enabled,
       delayMs,
@@ -105,16 +128,11 @@ export function useAutoSave({
       blockedReason,
       save: (reason, rev) => saveRef.current(reason, rev),
       onStateChange: (nextState) => {
-        setState(nextState);
+        if (schedulerRef.current === scheduler) applyState(nextState);
       },
     });
-  }, [blockedReason, delayMs, dirtyRevision, documentKey, enabled, hasChanges]);
-
-  useEffect(() => {
-    return () => {
-      schedulerRef.current?.dispose();
-    };
-  }, []);
+    applyState(scheduler.getState());
+  }, [applyState, blockedReason, delayMs, dirtyRevision, documentKey, enabled, hasChanges]);
 
   const triggerSave = useCallback(async (reason: SaveReason = "manual") => {
     if (!schedulerRef.current) {

@@ -40,10 +40,38 @@ interface EntityHarnessApi {
   setLocked: (locked: boolean) => void;
 }
 
+type LifecycleCall = SaveCall & { documentKey: string };
+type LifecycleSnapshot = {
+  calls: LifecycleCall[];
+  documentKey: string;
+  content: string;
+  dirty: boolean;
+  locked: boolean;
+  revision: number;
+  isSaving: boolean;
+  isScheduled: boolean;
+  lastSavedRevision: number | null;
+  maxInFlightForCurrentDocument: number;
+};
+
+interface LifecycleHarnessApi {
+  snapshot: () => LifecycleSnapshot;
+  setSaveMode: (mode: SaveMode) => void;
+  resolveNextSave: () => void;
+  rejectNextSave: () => void;
+  setEnabled: (enabled: boolean) => void;
+  setLocked: (locked: boolean) => void;
+  rerender: () => void;
+  remount: () => void;
+  switchDocument: (documentKey: string) => void;
+  manualSave: () => Promise<SaveResult>;
+}
+
 declare global {
   interface Window {
     __editorSaveHarness?: HarnessApi;
     __entityRegressionHarness?: EntityHarnessApi;
+    __hookLifecycleHarness?: LifecycleHarnessApi;
   }
 }
 
@@ -158,6 +186,172 @@ function RegressionHarness() {
   );
 }
 
+const lifecycle = {
+  calls: [] as LifecycleCall[],
+  mode: "immediate" as SaveMode,
+  pending: [] as PendingSave[],
+  activeByKey: new Map<string, number>(),
+  maxByKey: new Map<string, number>(),
+  currentSnapshot: null as
+    | (() => Omit<LifecycleSnapshot, "calls" | "maxInFlightForCurrentDocument">)
+    | null,
+  controls: null as {
+    setEnabled: (enabled: boolean) => void;
+    setLocked: (locked: boolean) => void;
+    rerender: () => void;
+    manualSave: () => Promise<SaveResult>;
+  } | null,
+};
+
+function HookLifecycleEditor({ documentKey }: { documentKey: string }) {
+  const [content, setContent] = useState(`Content for ${documentKey}`);
+  const [enabled, setEnabled] = useState(false);
+  const [locked, setLocked] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const [, setRenderCount] = useState(0);
+  const contentRef = useRef(content);
+  const dirtyRef = useRef(false);
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
+  const revisionRef = useRef(0);
+
+  const saveAdapter = useCallback(
+    async (reason: SaveReason, savedRevision: number): Promise<SaveResult> => {
+      lifecycle.calls.push({
+        documentKey,
+        reason,
+        revision: savedRevision,
+        content: contentRef.current,
+      });
+      const active = (lifecycle.activeByKey.get(documentKey) ?? 0) + 1;
+      lifecycle.activeByKey.set(documentKey, active);
+      lifecycle.maxByKey.set(
+        documentKey,
+        Math.max(active, lifecycle.maxByKey.get(documentKey) ?? 0),
+      );
+      try {
+        if (lifecycle.mode === "failed") {
+          return { status: "failed", error: new Error("Controlled save failure") };
+        }
+        if (lifecycle.mode === "deferred") {
+          await new Promise<void>((resolve, reject) => {
+            lifecycle.pending.push({ resolve, reject });
+          });
+        }
+        if (revisionRef.current === savedRevision) {
+          dirtyRef.current = false;
+          setDirty(false);
+        }
+        return { status: "saved", savedRevision };
+      } catch (error) {
+        return { status: "failed", error };
+      } finally {
+        lifecycle.activeByKey.set(documentKey, (lifecycle.activeByKey.get(documentKey) ?? 1) - 1);
+      }
+    },
+    [documentKey],
+  );
+
+  const autoSave = useAutoSave({
+    documentKey,
+    enabled: enabled && !locked,
+    delayMs: 1500,
+    dirtyRevision: revision,
+    hasChanges: dirty,
+    blockedReason: locked ? "Agent is running" : null,
+    save: saveAdapter,
+  });
+  const latestAutoSaveRef = useRef(autoSave);
+  latestAutoSaveRef.current = autoSave;
+
+  useEffect(() => {
+    lifecycle.currentSnapshot = () => ({
+      documentKey,
+      content: contentRef.current,
+      dirty: dirtyRef.current,
+      locked: lockedRef.current,
+      revision: revisionRef.current,
+      isSaving: latestAutoSaveRef.current.isSaving,
+      isScheduled: latestAutoSaveRef.current.isScheduled,
+      lastSavedRevision: latestAutoSaveRef.current.lastSavedRevision,
+    });
+    lifecycle.controls = {
+      setEnabled,
+      setLocked,
+      rerender: () => setRenderCount((count) => count + 1),
+      manualSave: () => latestAutoSaveRef.current.save("manual"),
+    };
+    return () => {
+      lifecycle.currentSnapshot = null;
+      lifecycle.controls = null;
+    };
+  }, [documentKey]);
+
+  return (
+    <div data-testid="hook-lifecycle-harness">
+      <textarea
+        data-testid="hook-content"
+        value={content}
+        onChange={(event) => {
+          const next = event.target.value;
+          contentRef.current = next;
+          dirtyRef.current = true;
+          revisionRef.current += 1;
+          setContent(next);
+          setDirty(true);
+          setRevision(revisionRef.current);
+        }}
+      />
+      <button onClick={() => void autoSave.save("manual")}>Save</button>
+    </div>
+  );
+}
+
+function HookLifecycleHost() {
+  const [documentKey, setDocumentKey] = useState("character:A");
+  const [mountKey, setMountKey] = useState(0);
+
+  useEffect(() => {
+    window.__hookLifecycleHarness = {
+      snapshot: () => {
+        const current = lifecycle.currentSnapshot?.();
+        if (!current) throw new Error("Hook lifecycle editor is not mounted");
+        return {
+          ...current,
+          calls: [...lifecycle.calls],
+          maxInFlightForCurrentDocument: lifecycle.maxByKey.get(current.documentKey) ?? 0,
+        };
+      },
+      setSaveMode: (mode) => {
+        lifecycle.mode = mode;
+      },
+      resolveNextSave: () => lifecycle.pending.shift()?.resolve(),
+      rejectNextSave: () => lifecycle.pending.shift()?.reject(new Error("Controlled save failure")),
+      setEnabled: (value) => lifecycle.controls?.setEnabled(value),
+      setLocked: (value) => lifecycle.controls?.setLocked(value),
+      rerender: () => lifecycle.controls?.rerender(),
+      remount: () => setMountKey((key) => key + 1),
+      switchDocument: (key) => {
+        setDocumentKey(key);
+        setMountKey((current) => current + 1);
+      },
+      manualSave: () =>
+        lifecycle.controls?.manualSave() ?? Promise.resolve({ status: "unchanged" }),
+    };
+    return () => {
+      delete window.__hookLifecycleHarness;
+    };
+  }, []);
+
+  return (
+    <HookLifecycleEditor
+      key={`${documentKey}:${mountKey}`}
+      documentKey={documentKey}
+    />
+  );
+}
+
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: Infinity, retry: false } },
 });
@@ -250,6 +444,8 @@ void preloadTiktokenEncoding().then(() => {
         <EntityRegressionHarness kind="character" />
       ) : new URLSearchParams(window.location.search).get("mode") === "world-info" ? (
         <EntityRegressionHarness kind="world-info" />
+      ) : new URLSearchParams(window.location.search).get("mode") === "hook-lifecycle" ? (
+        <HookLifecycleHost />
       ) : (
         <RegressionHarness />
       )}
