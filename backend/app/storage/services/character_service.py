@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.editor_content_limits import validate_editor_content
 from app.core.errors import ConflictError, NotFoundError
 from app.core.storage import delete_character_image, save_character_image
-from app.core.utils.tiktoken import get_encoding
+from app.core.utils.tiktoken import count_tokens
 from app.storage.models.character import Character
 from app.storage.repos import character_repo, project_repo
 from app.storage.services import knowledge_alias_service
@@ -55,9 +55,11 @@ def make_available_name(base_name: str, existing_names: list[str]) -> str:
 
 
 def calculate_token_count(content: str) -> int:
-    """计算文本 Token 数。"""
+    """按角色描述计数契约统计 Token，纯空白描述计为零。"""
+    if not content or not content.strip():
+        return 0
     try:
-        return len(get_encoding("cl100k_base").encode(content))
+        return count_tokens(content)
     except Exception:
         return len(content) // 2
 

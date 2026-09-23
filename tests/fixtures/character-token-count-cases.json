@@ -1,0 +1,55 @@
+{
+  "encoding": "o200k_base",
+  "cases": [
+    {
+      "id": "chinese",
+      "content": "林青在雨夜记录线索。她记得那把旧钥匙。",
+      "expected": 18
+    },
+    {
+      "id": "english",
+      "content": "The archivist found an old key beneath the library floor.",
+      "expected": 12
+    },
+    {
+      "id": "mixed",
+      "content": "林青 opened the archive at 21:30, then wrote：线索 #42。",
+      "expected": 19
+    },
+    {
+      "id": "nested_markdown_list",
+      "content": "角色设定：林青在雨夜记录线索。\n\n* 第一条：旧钥匙\n  * 子项：藏在书页里\n* 第二条：她说‘明天见’。\n",
+      "expected": 44
+    },
+    {
+      "id": "code_block",
+      "content": "## 线索\n```python\nclue = \"旧钥匙\"\nprint(clue)\n```",
+      "expected": 21
+    },
+    {
+      "id": "emoji",
+      "content": "🌧️ 雨夜的林青拿起钥匙 🔑，回头说：明天见 👋🏽。",
+      "expected": 28
+    },
+    {
+      "id": "empty",
+      "content": "",
+      "expected": 0
+    },
+    {
+      "id": "whitespace_only",
+      "content": " \t\n  \r\n",
+      "expected": 0
+    },
+    {
+      "id": "trailing_newline",
+      "content": "林青记录完毕。\n",
+      "expected": 6
+    },
+    {
+      "id": "surrounding_whitespace",
+      "content": "  林青记录完毕。\n",
+      "expected": 7
+    }
+  ]
+}

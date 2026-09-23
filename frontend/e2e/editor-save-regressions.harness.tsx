@@ -3,12 +3,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import tokenCases from "../../tests/fixtures/character-token-count-cases.json" with { type: "json" };
 import { MarkdownEditor } from "../src/components/markdown-editor";
 import { CharacterEditor } from "../src/features/characters/components/character-editor";
+import { CharacterList } from "../src/features/characters/components/character-list";
 import { useEditorSessionStore } from "../src/features/editor-session/lib/editor-session-store";
 import { EntryEditor } from "../src/features/world-info/components/entry-editor";
 import { useAutoSave, type SaveReason, type SaveResult } from "../src/hooks/use-auto-save";
-import type { Character } from "../src/lib/character.types";
+import type { Character, CharacterListItem } from "../src/lib/character.types";
+import type { Project } from "../src/lib/project.types";
 import { countTokens, preloadTiktokenEncoding } from "../src/lib/tiktoken-utils";
 import type { WorldInfoEntry } from "../src/lib/world-info.types";
 import fixture from "./fixtures/character-save-baseline.json" with { type: "json" };
@@ -38,6 +41,7 @@ interface EntityHarnessApi {
   remount: () => void;
   discard: () => Promise<void>;
   setLocked: (locked: boolean) => void;
+  refreshList: () => void;
 }
 
 type LifecycleCall = SaveCall & { documentKey: string };
@@ -383,11 +387,42 @@ const fixtureEntry: WorldInfoEntry = {
   updatedAt: "2026-09-23T00:00:00Z",
 };
 
-function EntityRegressionHarness({ kind }: { kind: "character" | "world-info" }) {
+const fixtureProject: Project = {
+  id: "isolated-project",
+  title: "Fixture project",
+  description: null,
+  wordCount: 0,
+  chapterCount: 0,
+  coverUrl: null,
+  createdAt: "2026-09-23T00:00:00Z",
+  updatedAt: "2026-09-23T00:00:00Z",
+};
+
+function EntityRegressionHarness({
+  kind,
+  showTokenList = false,
+}: {
+  kind: "character" | "world-info";
+  showTokenList?: boolean;
+}) {
   const [mountKey, setMountKey] = useState(0);
   const [isLocked, setLocked] = useState(false);
+  const [savedCharacter, setSavedCharacter] = useState(fixtureCharacter);
+  const [listCount, setListCount] = useState(() => countTokens(fixture.description));
   const saveCallsRef = useRef(0);
   const documentKey = `${kind}:isolated-fixture`;
+
+  const listItem: CharacterListItem = {
+    id: savedCharacter.id,
+    projectId: savedCharacter.projectId,
+    name: savedCharacter.name,
+    imageUrl: savedCharacter.imageUrl,
+    tokenCount: listCount,
+    isFavorited: savedCharacter.isFavorited,
+    aliases: savedCharacter.aliases,
+    createdAt: savedCharacter.createdAt,
+    updatedAt: savedCharacter.updatedAt,
+  };
 
   useEffect(() => {
     window.__entityRegressionHarness = {
@@ -400,11 +435,19 @@ function EntityRegressionHarness({ kind }: { kind: "character" | "world-info" })
         await useEditorSessionStore.getState().sessions.get(documentKey)?.discard?.();
       },
       setLocked,
+      refreshList: () => {
+        // Simulate the list API refresh using a fixed backend fixture count.
+        const savedCase = tokenCases.cases.find(
+          (item) => item.content === savedCharacter.description,
+        );
+        if (!savedCase) throw new Error("No fixed token count for saved description");
+        setListCount(savedCase.expected);
+      },
     };
     return () => {
       delete window.__entityRegressionHarness;
     };
-  }, [documentKey]);
+  }, [documentKey, savedCharacter.description]);
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -413,15 +456,40 @@ function EntityRegressionHarness({ kind }: { kind: "character" | "world-info" })
           data-testid="entity-regression-harness"
           style={{ height: 700 }}
         >
+          {showTokenList && (
+            <div data-testid="character-token-list">
+              <CharacterList
+                characters={[listItem]}
+                projectId={fixtureProject.id}
+                projects={[fixtureProject]}
+                currentProjectId={fixtureProject.id}
+                selectedCharacterId={savedCharacter.id}
+                onSelectProject={() => {}}
+                onCreateCharacter={() => {}}
+                onSelectCharacter={() => {}}
+                onEditProfile={() => {}}
+                onDeleteCharacter={() => {}}
+                onToggleFavorite={() => {}}
+                onBatchDelete={() => {}}
+                onBatchFavorite={() => {}}
+              />
+            </div>
+          )}
           {kind === "character" ? (
-            <CharacterEditor
-              key={mountKey}
-              character={fixtureCharacter}
-              isAgentLocked={isLocked}
-              onSave={() => {
-                saveCallsRef.current += 1;
-              }}
-            />
+            <div data-testid="character-token-editor">
+              <CharacterEditor
+                key={mountKey}
+                character={savedCharacter}
+                isAgentLocked={isLocked}
+                onSave={(data) => {
+                  saveCallsRef.current += 1;
+                  if (showTokenList) {
+                    setSavedCharacter({ ...savedCharacter, ...data });
+                    setListCount(countTokens(data.description));
+                  }
+                }}
+              />
+            </div>
           ) : (
             <EntryEditor
               key={mountKey}
@@ -442,6 +510,11 @@ void preloadTiktokenEncoding().then(() => {
     <StrictMode>
       {new URLSearchParams(window.location.search).get("mode") === "character" ? (
         <EntityRegressionHarness kind="character" />
+      ) : new URLSearchParams(window.location.search).get("mode") === "character-tokens" ? (
+        <EntityRegressionHarness
+          kind="character"
+          showTokenList
+        />
       ) : new URLSearchParams(window.location.search).get("mode") === "world-info" ? (
         <EntityRegressionHarness kind="world-info" />
       ) : new URLSearchParams(window.location.search).get("mode") === "hook-lifecycle" ? (

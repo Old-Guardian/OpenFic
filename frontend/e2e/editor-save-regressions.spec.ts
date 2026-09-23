@@ -24,8 +24,8 @@ type Snapshot = {
   tokenCount: number;
 };
 
-// This is an intentionally red baseline for T1–T3. Each assertion names the
-// user-visible contract and exercises the current implementation directly.
+// These regression cases were the red baseline for T1–T3. Each assertion names
+// the user-visible contract and exercises the implementation directly.
 test("T1: initial Markdown mount keeps the saved character clean", async ({ page }) => {
   await page.goto("/__editor-save-regressions__/");
   await expect(page.getByTestId("regression-harness")).toBeVisible();

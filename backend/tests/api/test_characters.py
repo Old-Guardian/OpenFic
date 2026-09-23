@@ -2,6 +2,7 @@
 """角色 API 测试。"""
 
 from io import BytesIO
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,12 @@ from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.storage.models.character import Character
+
+
+CHARACTER_TOKEN_CASES = json.loads(
+    (Path(__file__).parents[3] / "tests" / "fixtures" / "character-token-count-cases.json")
+    .read_text(encoding="utf-8")
+)["cases"]
 
 
 def make_image_file(color: str = "red") -> bytes:
@@ -140,6 +147,56 @@ async def test_list_characters_is_scoped_by_project(client: AsyncClient) -> None
     assert data["items"][0]["project_id"] == project_id
     assert "token_count" in data["items"][0]
     assert "description" not in data["items"][0]
+
+
+@pytest.mark.asyncio
+async def test_character_list_token_count_uses_saved_description_only(
+    client: AsyncClient,
+) -> None:
+    project_id = await create_project(client, "角色 Token 计数项目")
+    created = {
+        case["id"]: await create_character(
+            client, project_id, f"角色 {case['id']}", case["content"]
+        )
+        for case in CHARACTER_TOKEN_CASES
+    }
+    list_url = f"/api/v1/projects/{project_id}/characters"
+
+    async def list_counts() -> dict[str, int]:
+        response = await client.get(list_url)
+        assert response.status_code == 200
+        assert response.json()["total"] == len(CHARACTER_TOKEN_CASES)
+        return {item["id"]: item["token_count"] for item in response.json()["items"]}
+
+    original_counts = await list_counts()
+    assert original_counts == {
+        created[case["id"]]["id"]: case["expected"]
+        for case in CHARACTER_TOKEN_CASES
+    }
+
+    original = created["nested_markdown_list"]
+    original_description = next(
+        case["content"] for case in CHARACTER_TOKEN_CASES if case["id"] == "nested_markdown_list"
+    )
+    renamed = await client.patch(
+        f"/api/v1/characters/{original['id']}",
+        data={"name": "新名字", "aliases_json": json.dumps(["新别名"], ensure_ascii=False)},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["description"] == original_description
+    assert renamed.json()["aliases"] == ["新别名"]
+    assert await list_counts() == original_counts
+
+    replacement = next(case for case in CHARACTER_TOKEN_CASES if case["id"] == "mixed")
+    updated = await client.patch(
+        f"/api/v1/characters/{original['id']}",
+        data={"description": replacement["content"]},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["description"] == replacement["content"]
+    saved_counts = {**original_counts, original["id"]: replacement["expected"]}
+    assert await list_counts() == saved_counts
+    assert await list_counts() == saved_counts
 
 
 @pytest.mark.asyncio

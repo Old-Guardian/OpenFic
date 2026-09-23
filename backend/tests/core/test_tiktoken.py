@@ -1,4 +1,5 @@
 from hashlib import sha256
+import json
 from pathlib import Path
 
 import tiktoken
@@ -7,7 +8,7 @@ import tiktoken.registry
 import pytest
 
 from app.core.utils import tiktoken as tiktoken_utils
-from app.core.utils.tiktoken import get_encoding
+from app.core.utils.tiktoken import count_tokens, get_encoding
 from app.storage.services import character_service, world_info_entry_service
 
 
@@ -15,6 +16,10 @@ EXPECTED_ENCODING_HASHES = {
     "cl100k_base": "223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7",
     "o200k_base": "446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d",
 }
+CHARACTER_TOKEN_CASES = json.loads(
+    (Path(__file__).parents[3] / "tests" / "fixtures" / "character-token-count-cases.json")
+    .read_text(encoding="utf-8")
+)["cases"]
 
 
 class StubEncoding:
@@ -156,17 +161,29 @@ def test_cache_validation_runs_once_per_process(
         get_encoding("o200k_base")
 
 
-def test_character_token_count_uses_shared_offline_encoding(
+def test_character_token_count_uses_public_count_tokens_without_trimming(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        character_service,
-        "get_encoding",
-        lambda _: StubEncoding(),
-        raising=False,
-    )
+    requested: list[str] = []
 
-    assert character_service.calculate_token_count("OpenFic") == 7
+    def record_count(text: str) -> int:
+        requested.append(text)
+        return 7
+
+    monkeypatch.setattr(character_service, "count_tokens", record_count)
+
+    assert character_service.calculate_token_count("  OpenFic\n") == 7
+    assert requested == ["  OpenFic\n"]
+
+
+@pytest.mark.parametrize("case", CHARACTER_TOKEN_CASES, ids=lambda case: case["id"])
+def test_character_token_count_matches_shared_fixture(case: dict) -> None:
+    assert character_service.calculate_token_count(case["content"]) == case["expected"]
+
+
+def test_public_count_tokens_preserves_whitespace_semantics() -> None:
+    assert count_tokens(" \t\n  \r\n") > 0
+    assert character_service.calculate_token_count(" \t\n  \r\n") == 0
 
 
 def test_world_info_token_count_uses_shared_offline_encoding(
