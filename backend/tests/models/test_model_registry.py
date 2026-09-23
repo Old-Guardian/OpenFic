@@ -4,6 +4,18 @@ Adapter registry tests.
 """
 
 from app.models.registry import AdapterRegistry
+from app.models.adapters.anthropic_compatible import AnthropicCompatibleAdapter
+
+
+_ANTHROPIC_COMPATIBLE_PROVIDER_TYPES = {
+    "freemodel",
+    "minimax",
+    "minimax-cn",
+    "minimax-coding-plan",
+    "minimax-cn-coding-plan",
+    "subconscious",
+    "thinkingmachines",
+}
 
 
 def test_registry_lists_only_current_first_class_provider_types() -> None:
@@ -25,4 +37,12 @@ def test_registry_lists_only_current_first_class_provider_types() -> None:
         "openai-compatible-responses",
         "anthropic-compatible",
         "gemini-compatible",
+        *_ANTHROPIC_COMPATIBLE_PROVIDER_TYPES,
     }
+
+
+def test_registry_uses_anthropic_compatible_adapter_for_anthropic_catalog_providers() -> None:
+    for provider_type in _ANTHROPIC_COMPATIBLE_PROVIDER_TYPES:
+        adapter = AdapterRegistry.get_adapter(provider_type)
+
+        assert isinstance(adapter, AnthropicCompatibleAdapter)

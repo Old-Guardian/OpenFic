@@ -14,7 +14,8 @@ import { invalidateWritingEditorEntityQueries } from "@/features/writing/hooks/u
 import { useTabsStore } from "@/features/writing/store/use-tabs-store";
 import i18n from "@/i18n";
 import type {
-  AgentImageAttachment,
+  AgentAttachment,
+  AgentAttachmentError,
   AgentMessage,
   AgentPendingMessage,
   AgentSessionChanges,
@@ -37,13 +38,18 @@ import {
   rollbackAgentRevision,
   cancelAgentSession,
   fetchAgentSessionChanges,
-  uploadAgentImageAttachment,
+  uploadAgentAttachment,
   submitAgentToolApproval,
 } from "@/lib/api-client";
 import type { CharacterListResponse } from "@/lib/character.types";
 import type { WorldInfoEntryBriefListResponse } from "@/lib/world-info.types";
 
 import type { ClarificationAnswerItem } from "../components/agent/message-blocks/messages/special/clarification-flow-state";
+import {
+  normalizeAgentAttachments,
+  requiresAgentAttachmentProcessing,
+  isSupportedAgentImage,
+} from "../lib/agent-file-attachments";
 import { joinAgentSession, subscribeAgentSessionEvents } from "../lib/agent-socket";
 import {
   applyAgentTranscriptEventToLiveState,
@@ -83,6 +89,17 @@ import {
   shouldJoinLoadedAgentSession,
 } from "./use-agent-session-reconnect";
 
+interface AgentAttachmentInput {
+  id?: string;
+  file?: File;
+  uploadedAttachment?: AgentAttachment;
+}
+
+interface AgentSendResult {
+  sent: boolean;
+  failedAttachmentIds: string[];
+}
+
 function isUserTextMessage(message: AgentMessage | undefined): message is AgentMessage {
   return Boolean(
     message &&
@@ -90,7 +107,50 @@ function isUserTextMessage(message: AgentMessage | undefined): message is AgentM
   );
 }
 
-function createOptimisticUserMessage(content: string): AgentMessage {
+function createOptimisticAttachment(
+  input: AgentAttachmentInput,
+  index: number,
+): AgentAttachment | null {
+  const clientId = input.id ?? `pending-attachment-${Date.now()}-${index}`;
+  if (input.uploadedAttachment) {
+    return {
+      ...input.uploadedAttachment,
+      clientId,
+      status: "completed",
+    };
+  }
+  if (!input.file) return null;
+
+  return {
+    id: clientId,
+    clientId,
+    sessionId: "",
+    storageName: "",
+    fileName: input.file.name,
+    mimeType: input.file.type || "application/octet-stream",
+    sizeBytes: input.file.size,
+    contentLength: 0,
+    width: null,
+    height: null,
+    url:
+      isSupportedAgentImage(input.file) && typeof URL.createObjectURL === "function"
+        ? URL.createObjectURL(input.file)
+        : "",
+    status: "uploading",
+  };
+}
+
+function getAttachmentProcessingIds(attachments: AgentAttachmentInput[]): string[] {
+  return attachments.flatMap((attachment) => {
+    if (!attachment.id || !attachment.file) return [];
+    return requiresAgentAttachmentProcessing(attachment.file) ? [attachment.id] : [];
+  });
+}
+
+function createOptimisticUserMessage(
+  content: string,
+  attachments: AgentAttachmentInput[] = [],
+): AgentMessage {
   const timestamp = Date.now();
   return {
     id: `optimistic-user-${timestamp}`,
@@ -98,13 +158,81 @@ function createOptimisticUserMessage(content: string): AgentMessage {
     role: "user",
     timestamp,
     content,
+    attachments: attachments.flatMap((attachment, index) => {
+      const optimisticAttachment = createOptimisticAttachment(attachment, index);
+      return optimisticAttachment ? [optimisticAttachment] : [];
+    }),
     isDraft: true,
+  };
+}
+
+async function uploadPendingAgentAttachments(
+  sessionId: string,
+  attachments: AgentAttachmentInput[],
+): Promise<{
+  attachments: AgentAttachment[];
+  failedAttachmentIds: string[];
+  failedAttachments: AgentAttachmentError[];
+}> {
+  const results = await Promise.all(
+    attachments.map(async (attachment) => {
+      if (attachment.uploadedAttachment) {
+        return {
+          attachment: attachment.uploadedAttachment,
+          failedId: null,
+          failedAttachment: null,
+        };
+      }
+      if (!attachment.file) {
+        return { attachment: null, failedId: attachment.id ?? null, failedAttachment: null };
+      }
+
+      try {
+        return {
+          attachment: await uploadAgentAttachment(sessionId, attachment.file, attachment.id),
+          failedId: null,
+          failedAttachment: null,
+        };
+      } catch (error) {
+        console.error("Failed to upload agent attachment:", error);
+        const failedId = attachment.id ?? "";
+        return {
+          attachment: null,
+          failedId: failedId || null,
+          failedAttachment: failedId
+            ? {
+                id: failedId,
+                fileName: attachment.file.name,
+                mimeType: attachment.file.type || "application/octet-stream",
+                sizeBytes: attachment.file.size,
+                error: getAgentApiErrorMessage(
+                  error,
+                  i18n.t("writing.aiSidebar.attachmentUploadFailed"),
+                ),
+              }
+            : null,
+        };
+      }
+    }),
+  );
+  const failedAttachmentIds = results.flatMap((result) =>
+    result.failedId ? [result.failedId] : [],
+  );
+  if (failedAttachmentIds.length > 0) {
+    toast.error(i18n.t("writing.aiSidebar.attachmentUploadFailed"));
+  }
+  return {
+    attachments: results.flatMap((result) => (result.attachment ? [result.attachment] : [])),
+    failedAttachmentIds,
+    failedAttachments: results.flatMap((result) =>
+      result.failedAttachment ? [result.failedAttachment] : [],
+    ),
   };
 }
 
 interface RollbackInputRestore {
   content: string;
-  attachments: AgentImageAttachment[];
+  attachments: AgentAttachment[];
 }
 
 function hasApprovalMessage(messages: AgentMessage[]): boolean {
@@ -144,6 +272,69 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function getString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function updateAttachmentStatusInMessages(
+  messages: AgentMessage[],
+  payload: Record<string, unknown>,
+): AgentMessage[] {
+  const clientId = getString(payload.client_attachment_id);
+  if (!clientId) return messages;
+  const status = getString(payload.status) || "uploading";
+  const completedAttachment = isRecord(payload.attachment)
+    ? normalizeAgentAttachments([payload.attachment])[0]
+    : undefined;
+
+  return messages.map((message) => {
+    if (
+      !message.attachments?.some(
+        (attachment) => (attachment.clientId || attachment.id) === clientId,
+      )
+    ) {
+      return message;
+    }
+    return {
+      ...message,
+      attachments: message.attachments.map((attachment) => {
+        if ((attachment.clientId || attachment.id) !== clientId) return attachment;
+        if (status === "completed" && completedAttachment) {
+          if (
+            attachment.url.startsWith("blob:") &&
+            attachment.url !== completedAttachment.url &&
+            typeof URL.revokeObjectURL === "function"
+          ) {
+            URL.revokeObjectURL(attachment.url);
+          }
+          return { ...completedAttachment, clientId, status: "completed" };
+        }
+        return {
+          ...attachment,
+          status: status === "error" ? "error" : "uploading",
+          ...(status === "error" && getString(payload.error)
+            ? { error: getString(payload.error) }
+            : {}),
+        };
+      }),
+    };
+  });
+}
+
+function updateAttachmentErrorsInMessages(
+  messages: AgentMessage[],
+  failedAttachments: AgentAttachmentError[],
+): AgentMessage[] {
+  if (failedAttachments.length === 0) return messages;
+  const errorsById = new Map(
+    failedAttachments.map((attachment) => [attachment.id, attachment.error]),
+  );
+  return messages.map((message) => ({
+    ...message,
+    attachments: message.attachments?.map((attachment) => {
+      const attachmentId = attachment.clientId || attachment.id;
+      const error = errorsById.get(attachmentId);
+      return error ? { ...attachment, status: "error" as const, error } : attachment;
+    }),
+  }));
 }
 
 function getAgentApiErrorMessage(error: unknown, fallback: string): string {
@@ -303,6 +494,8 @@ export function useAgentSession({
   const activeReasoningOverrideRef = useRef<ReasoningEffort | null | undefined>(undefined);
   const pendingMessageRef = useRef<AgentPendingMessage | null>(null);
   const isCompactingRef = useRef(false);
+  const attachmentProcessingIdsRef = useRef<Set<string>>(new Set());
+  const completedAttachmentProcessingIdsRef = useRef<Set<string>>(new Set());
   const manualCompactionPreviousStateRef = useRef<Pick<
     AgentTranscriptState,
     "status" | "isRunning" | "currentStage"
@@ -320,6 +513,7 @@ export function useAgentSession({
   const [isRunning, setIsRunning] = useState(false);
   const [isCompacting, setIsCompacting] = useState(false);
   const [isRollbacking, setIsRollbacking] = useState(false);
+  const [isAttachmentProcessing, setIsAttachmentProcessing] = useState(false);
   const [currentStage, setCurrentStage] = useState<string>("");
 
   useEffect(() => {
@@ -582,6 +776,42 @@ export function useAgentSession({
           currentStage: "",
         }));
         return;
+      }
+
+      if (event.type === "attachment_processing") {
+        const clientId = getString(payload.client_attachment_id);
+        if (clientId) {
+          if (payload.status === "started") {
+            if (!completedAttachmentProcessingIdsRef.current.has(clientId)) {
+              attachmentProcessingIdsRef.current.add(clientId);
+            }
+          } else {
+            completedAttachmentProcessingIdsRef.current.add(clientId);
+            attachmentProcessingIdsRef.current.delete(clientId);
+          }
+          setIsAttachmentProcessing(attachmentProcessingIdsRef.current.size > 0);
+        }
+        return;
+      }
+
+      if (event.type === "attachment_status") {
+        const clientId = getString(payload.client_attachment_id);
+        if (clientId && (payload.status === "completed" || payload.status === "error")) {
+          completedAttachmentProcessingIdsRef.current.add(clientId);
+          attachmentProcessingIdsRef.current.delete(clientId);
+          setIsAttachmentProcessing(attachmentProcessingIdsRef.current.size > 0);
+        }
+        updateTranscriptState((current) => ({
+          ...current,
+          messages: updateAttachmentStatusInMessages(current.messages, payload),
+        }));
+        return;
+      }
+
+      if (event.type === "task_completed" || event.type === "error") {
+        attachmentProcessingIdsRef.current.clear();
+        completedAttachmentProcessingIdsRef.current.clear();
+        setIsAttachmentProcessing(false);
       }
 
       const result = applyTranscriptEvent(event);
@@ -858,21 +1088,26 @@ export function useAgentSession({
   }, [agentKey, attachAgentSocket, commitTranscriptState, sessionId]);
 
   const startSession = useCallback(
-    async (
-      userRequest: string,
-      attachments?: Array<{ file?: File; uploadedAttachment?: AgentImageAttachment }>,
-    ) => {
+    async (userRequest: string, attachments?: AgentAttachmentInput[]): Promise<AgentSendResult> => {
       if (!modelId) {
         toast.error(i18n.t("writing.aiSidebar.noModelSelected"));
-        return;
+        return { sent: false, failedAttachmentIds: [] };
       }
 
+      const processingAttachmentIds = getAttachmentProcessingIds(attachments ?? []);
+      processingAttachmentIds.forEach((clientId) => {
+        completedAttachmentProcessingIdsRef.current.delete(clientId);
+        attachmentProcessingIdsRef.current.add(clientId);
+      });
+      if (processingAttachmentIds.length > 0) setIsAttachmentProcessing(true);
+
+      let failedAttachmentIds: string[] = [];
       try {
         suppressSocketEventsAfterAbortRef.current = false;
         transportRetryAttemptRef.current = 0;
         setChanges(null);
         commitTranscriptState({
-          messages: [createOptimisticUserMessage(userRequest)],
+          messages: [createOptimisticUserMessage(userRequest, attachments)],
           status: "running",
           isRunning: true,
           currentStage: agentKey || AGENT_STAGE_TEXT.build,
@@ -890,7 +1125,9 @@ export function useAgentSession({
           ...(agentKey ? { agent_key: agentKey } : {}),
         });
 
-        if (projectIdRef.current !== projectId) return;
+        if (projectIdRef.current !== projectId) {
+          return { sent: false, failedAttachmentIds };
+        }
         onSessionCreated?.(createResponse);
         sessionIdRef.current = createResponse.session_id;
         activeModelIdRef.current = modelId ?? null;
@@ -900,26 +1137,37 @@ export function useAgentSession({
         queryClient.invalidateQueries({ queryKey: ["tasks", projectId], exact: false });
         attachAgentSocket(createResponse.session_id);
         await joinAgentSession(createResponse.session_id);
-        if (projectIdRef.current !== projectId) return;
-        const uploadedAttachments = attachments?.length
-          ? await Promise.all(
-              attachments.flatMap((attachment) =>
-                attachment.file
-                  ? [uploadAgentImageAttachment(createResponse.session_id, attachment.file)]
-                  : [],
-              ),
-            )
-          : undefined;
+        if (projectIdRef.current !== projectId) {
+          return { sent: false, failedAttachmentIds };
+        }
+        const uploadResult = await uploadPendingAgentAttachments(
+          createResponse.session_id,
+          attachments ?? [],
+        );
+        failedAttachmentIds = uploadResult.failedAttachmentIds;
+        if (uploadResult.failedAttachments.length > 0) {
+          updateTranscriptState((current) => ({
+            ...current,
+            messages: updateAttachmentErrorsInMessages(
+              current.messages,
+              uploadResult.failedAttachments,
+            ),
+          }));
+        }
         await sendAgentMessage(
           createResponse.session_id,
           userRequest,
           undefined,
           undefined,
           undefined,
-          uploadedAttachments,
+          uploadResult.attachments.length > 0 ? uploadResult.attachments : undefined,
+          uploadResult.failedAttachments,
         );
+        return { sent: true, failedAttachmentIds };
       } catch (error) {
-        if (projectIdRef.current !== projectId) return;
+        if (projectIdRef.current !== projectId) {
+          return { sent: false, failedAttachmentIds };
+        }
         console.error("Failed to start agent session:", error);
         updateTranscriptState((current) => ({
           ...current,
@@ -928,6 +1176,7 @@ export function useAgentSession({
           currentStage: "",
         }));
         toast.error(i18n.t("assistant.startFailed"));
+        return { sent: false, failedAttachmentIds };
       }
     },
     [
@@ -946,22 +1195,28 @@ export function useAgentSession({
   );
 
   const sendMessage = useCallback(
-    async (
-      message: string,
-      attachments?: Array<{ file?: File; uploadedAttachment?: AgentImageAttachment }>,
-    ) => {
+    async (message: string, attachments?: AgentAttachmentInput[]): Promise<AgentSendResult> => {
       const activeSessionId = sessionIdRef.current ?? sessionId;
       if (!activeSessionId) {
         toast.error(i18n.t("assistant.sessionNotFound"));
-        return;
+        return { sent: false, failedAttachmentIds: [] };
       }
       if (pendingMessageRef.current) {
         toast.error(i18n.t("writing.aiSidebar.cannotSendPendingMessage"));
-        return;
+        return { sent: false, failedAttachmentIds: [] };
       }
 
       const sessionWasRunning = transcriptStateRef.current.isRunning;
-      const optimisticMessage = sessionWasRunning ? null : createOptimisticUserMessage(message);
+      const optimisticMessage = sessionWasRunning
+        ? null
+        : createOptimisticUserMessage(message, attachments);
+      const processingAttachmentIds = getAttachmentProcessingIds(attachments ?? []);
+      processingAttachmentIds.forEach((clientId) => {
+        completedAttachmentProcessingIdsRef.current.delete(clientId);
+        attachmentProcessingIdsRef.current.add(clientId);
+      });
+      if (processingAttachmentIds.length > 0) setIsAttachmentProcessing(true);
+      let failedAttachmentIds: string[] = [];
 
       try {
         suppressSocketEventsAfterAbortRef.current = false;
@@ -980,19 +1235,21 @@ export function useAgentSession({
           attachAgentSocket(activeSessionId);
         }
         await joinAgentSession(activeSessionId);
-        const uploadedAttachments = attachments?.length
-          ? await Promise.all(
-              attachments.flatMap((attachment) =>
-                attachment.file
-                  ? [uploadAgentImageAttachment(activeSessionId, attachment.file)]
-                  : [],
-              ),
-            )
-          : undefined;
-        const existingAttachments = attachments?.flatMap((attachment) =>
-          attachment.uploadedAttachment ? [attachment.uploadedAttachment] : [],
+        const uploadResult = await uploadPendingAgentAttachments(
+          activeSessionId,
+          attachments ?? [],
         );
-        const messageAttachments = [...(existingAttachments ?? []), ...(uploadedAttachments ?? [])];
+        failedAttachmentIds = uploadResult.failedAttachmentIds;
+        if (uploadResult.failedAttachments.length > 0) {
+          updateTranscriptState((current) => ({
+            ...current,
+            messages: updateAttachmentErrorsInMessages(
+              current.messages,
+              uploadResult.failedAttachments,
+            ),
+          }));
+        }
+
         const nextModelId =
           activeModelOverrideRef.current === undefined
             ? (modelOverride !== undefined && modelOverride !== null ? modelOverride : undefined)
@@ -1008,14 +1265,14 @@ export function useAgentSession({
             : reasoningEffortOverride !== activeReasoningOverrideRef.current
               ? (reasoningEffortOverride ?? null)
               : undefined;
-
         const response = await sendAgentMessage(
           activeSessionId,
           message,
           nextModelId,
           nextReasoningEffort,
           agentKey,
-          messageAttachments.length > 0 ? messageAttachments : undefined,
+          uploadResult.attachments.length > 0 ? uploadResult.attachments : undefined,
+          uploadResult.failedAttachments,
         );
         if (response.model_updated) {
           activeModelIdRef.current = modelId ?? null;
@@ -1025,6 +1282,7 @@ export function useAgentSession({
         if (response.queued && response.pending_message) {
           syncPendingMessageState(createPendingUserMessage(response.pending_message));
         }
+        return { sent: true, failedAttachmentIds };
       } catch (error) {
         console.error("Failed to send message:", error);
         updateTranscriptState((current) => ({
@@ -1037,6 +1295,7 @@ export function useAgentSession({
           currentStage: "",
         }));
         toast.error(i18n.t("assistant.sendMessageFailed"));
+        return { sent: false, failedAttachmentIds };
       }
     },
     [
@@ -1293,6 +1552,9 @@ export function useAgentSession({
     ignoredApprovalIdsRef.current.clear();
     interruptBatchRef.current = null;
     manualCompactionPreviousStateRef.current = null;
+    attachmentProcessingIdsRef.current.clear();
+    completedAttachmentProcessingIdsRef.current.clear();
+    setIsAttachmentProcessing(false);
     setChanges(null);
     syncPendingMessageState(null);
     syncCompactingState(false);
@@ -1322,6 +1584,9 @@ export function useAgentSession({
     suppressNextErrorAfterCompactionErrorRef.current = false;
     interruptBatchRef.current = null;
     manualCompactionPreviousStateRef.current = null;
+    attachmentProcessingIdsRef.current.clear();
+    completedAttachmentProcessingIdsRef.current.clear();
+    setIsAttachmentProcessing(false);
     socketUnsubscribeRef.current?.();
     socketUnsubscribeRef.current = null;
     syncPendingMessageState(null);
@@ -1599,6 +1864,7 @@ export function useAgentSession({
     isRunning,
     isCompacting,
     isRollbacking,
+    isAttachmentProcessing,
     currentStage,
     startSession,
     sendMessage,

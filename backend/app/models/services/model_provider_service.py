@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.encryption import EncryptionService
 from app.core.errors import NotFoundError
+from app.models.adapters.anthropic_compatible import ANTHROPIC_COMPATIBLE_PROVIDER_TYPES
 from app.models.catalog import CatalogMatch, ModelProviderCatalogService
 from app.models.clients.google_vertex_auth import (
     VERTEX_ERROR_CREDENTIALS_INVALID,
@@ -56,6 +57,10 @@ _VERTEX_VALIDATION_TIMEOUT_SECONDS = 30
 _VERTEX_RESPONSE_BLOCKED_MESSAGE = (
     "模型没有返回有效内容，可能被安全策略拦截，无法确认连接可用"
 )
+
+
+def _get_model_discovery_provider_type(provider_type: str) -> str:
+    return ModelProviderService._resolve_runtime_provider_type(provider_type)
 
 
 class ModelProviderService:
@@ -843,16 +848,20 @@ class ModelProviderService:
     @staticmethod
     def _resolve_runtime_provider_type(provider_type: str) -> str:
         """
-        解析运行时 Provider 类型（validate_and_get_models 与
-        get_available_models 共用的路由规则，见实施计划第 5.2 节）。
+        运行时 Provider 类型：validate_and_get_models 与
+        get_available_models 共用的路由规则（见实施计划 5.2 节）。
 
-        Vertex 显式路由到原生 Adapter；google-vertex-anthropic 保持既有
-        兼容回退，不进入 Gemini 后端。
+        Vertex 显式路由到原生 Adapter；google-vertex-anthropic 保留
+        兼容回退；其余 Gemini 保持。
         """
         if provider_type == VERTEX_PROVIDER_TYPE:
             return VERTEX_PROVIDER_TYPE
+        if (
+            provider_type == "anthropic-compatible"
+            or provider_type in ANTHROPIC_COMPATIBLE_PROVIDER_TYPES
+        ):
+            return "anthropic-compatible"
         if provider_type in (
-            "anthropic-compatible",
             "openai-compatible-responses",
             "gemini-compatible",
         ):

@@ -16,6 +16,8 @@ import app.agent_runtime.tools.impls.context.character  # noqa: F401
 import app.agent_runtime.tools.impls.context.world_entry  # noqa: F401
 import app.agent_runtime.tools.impls.context.knowledge_search  # noqa: F401
 import app.agent_runtime.tools.impls.context.knowledge_read  # noqa: F401
+import app.agent_runtime.tools.impls.file.list_file  # noqa: F401
+import app.agent_runtime.tools.impls.file.read_file  # noqa: F401
 import app.agent_runtime.tools.impls.interaction.ask_user  # noqa: F401
 import app.agent_runtime.tools.impls.orchestration  # noqa: F401
 import app.agent_runtime.tools.impls.plan  # noqa: F401
