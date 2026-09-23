@@ -406,14 +406,15 @@ export function WorldInfoPage() {
   /** 处理选择条目 */
   const handleSelectEntry = useCallback(
     (entryId: string) => {
-      if (entryId === currentEntryId) return;
-      const affectedKeys = currentEntryId ? [`world-info:${currentEntryId}`] : [];
+      const activeEntryId = useWorldInfoStore.getState().currentEntryId;
+      if (entryId === activeEntryId) return;
+      const affectedKeys = activeEntryId ? [`world-info:${activeEntryId}`] : [];
       void requestLeave(affectedKeys, () => {
         setCurrentEntry(entryId);
         setSidebarOpen(false);
       });
     },
-    [currentEntryId, setCurrentEntry, setSidebarOpen],
+    [setCurrentEntry, setSidebarOpen],
   );
 
   /** 处理切换条目启用状态 */
