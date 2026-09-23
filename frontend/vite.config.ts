@@ -25,6 +25,31 @@ function cacheFontResponseHeaders(): Plugin {
   };
 }
 
+/** Only the Vite dev server serves this isolated editor regression page. */
+function editorSaveRegressionPage(): Plugin {
+  return {
+    name: "editor-save-regression-page",
+    apply: "serve",
+    configureServer(server) {
+      server.middlewares.use(async (request, response, next) => {
+        if (request.url?.split("?")[0] !== "/__editor-save-regressions__/") {
+          next();
+          return;
+        }
+        try {
+          const html =
+            '<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"></head>' +
+            '<body><div id="root"></div><script type="module" src="/e2e/editor-save-regressions.harness.tsx"></script></body></html>';
+          response.setHeader("Content-Type", "text/html; charset=utf-8");
+          response.end(await server.transformIndexHtml(request.url ?? "", html));
+        } catch (error) {
+          next(error);
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const backendTarget = (env.VITE_BACKEND_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
@@ -33,7 +58,11 @@ export default defineConfig(({ mode }) => {
     define: {
       __OPENFIC_FRONTEND_VERSION__: JSON.stringify(frontendVersion),
     },
-    plugins: [...(react() as unknown as Plugin[]), cacheFontResponseHeaders()],
+    plugins: [
+      ...(react() as unknown as Plugin[]),
+      cacheFontResponseHeaders(),
+      editorSaveRegressionPage(),
+    ],
     resolve: {
       alias: {
         "@": srcPath,
