@@ -1,7 +1,7 @@
 # 编辑器保存与角色 Token 统计修复方案
 
 日期：2026-09-23
-状态：待实施；本文仅确定方案与验收要求，不代表修复或测试已完成。
+状态：T0/T1 已完成；T2/T3/T4 待实施。
 建议分支：`fix/editor-save-and-token-count`
 
 ## 1. 目标与范围
@@ -128,6 +128,13 @@
 - 锁定、解锁、聚焦、光标移动不改变 dirty。
 - 输入、删除、粘贴、格式操作以及撤销/重做产生真实正文更新，不被新过滤条件吞掉。
 - 放弃修改恢复基线的正文与显示格式，不被误读为 HTML，不留下 dirty。
+
+#### T1 验收记录（2026-09-23）
+
+- 状态：已完成。公共 Markdown 编辑器忽略 `setEditable` 的空更新，只在正文事务变化时回调；Placeholder 刷新引起的单个尾随空段落按编辑器内部维护处理。其他追加事务仍参与正文变更判断。
+- 角色和世界书放弃修改时以 Markdown 类型、`emitUpdate: false` 恢复保存基线。
+- 隔离浏览器入口在真实 StrictMode 下挂载公共编辑器、实际 `CharacterEditor` 与 `EntryEditor`；自动保存设置固定关闭，不连接真实项目。运行 `node node_modules/@playwright/test/cli.js test e2e/editor-save-regressions.spec.ts -g "T1:"`，6 项通过，覆盖初始回调为 0、锁定/聚焦/光标不脏、输入/删除/粘贴/格式/撤销/重做有更新、角色重复挂载与角色/世界书放弃修改恢复列表格式。完整产品路由回归留给 T4。
+- 原有 `editor-auto-save-state.spec.ts` 51 项通过；`node node_modules/oxlint/bin/oxlint . --type-aware --type-check` 与生产构建通过。T2 的 StrictMode 保存断言仍为 0 次调用，T3 的计数断言仍为后端 56、前端 44，均保持预期失败。
 
 ### T2：修复 StrictMode 下的保存生命周期
 

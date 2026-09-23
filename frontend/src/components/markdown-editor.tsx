@@ -1,4 +1,5 @@
 import { Box, Flex, Text, Tooltip } from "@radix-ui/themes";
+import type { EditorEvents } from "@tiptap/core";
 import type { EditorView } from "@tiptap/pm/view";
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
@@ -186,7 +187,26 @@ export function MarkdownEditor({
 
   useEffect(() => {
     if (!editor) return;
-    const onUpdate = () => {
+    const onUpdate = ({ transaction, appendedTransactions }: EditorEvents["update"]) => {
+      // Placeholder refreshes can make TrailingNode append a single empty
+      // paragraph during mount. Ignore only that exact maintenance change;
+      // other appended document changes still reach onContentChange.
+      const beforeDoc = transaction.before;
+      const afterDoc = editor.state.doc;
+      const lastNode = afterDoc.lastChild;
+      const isPlaceholderTrailingParagraph =
+        !transaction.docChanged &&
+        transaction.getMeta("tiptap__placeholder$") !== undefined &&
+        afterDoc.childCount === beforeDoc.childCount + 1 &&
+        lastNode?.type.name === "paragraph" &&
+        lastNode.content.size === 0 &&
+        beforeDoc.content.eq(afterDoc.content.cut(0, beforeDoc.content.size));
+      if (isPlaceholderTrailingParagraph) {
+        return;
+      }
+      if (!transaction.docChanged && !appendedTransactions.some((appended) => appended.docChanged)) {
+        return;
+      }
       const markdown = editorRef.current?.getMarkdown();
       if (markdown !== undefined && markdown !== contentSyncedRef.current) {
         contentSyncedRef.current = markdown;
@@ -201,7 +221,7 @@ export function MarkdownEditor({
 
   useEffect(() => {
     if (!editor) return;
-    editor.setEditable(!isLocked);
+    editor.setEditable(!isLocked, false);
   }, [editor, isLocked]);
 
   useEffect(() => {

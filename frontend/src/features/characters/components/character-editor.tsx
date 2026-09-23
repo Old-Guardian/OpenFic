@@ -182,7 +182,10 @@ export function CharacterEditor({
           description: baseline.description,
           aliases: baseline.aliases,
         };
-        editorRef.current?.commands.setContent(baseline.description);
+        editorRef.current?.commands.setContent(baseline.description, {
+          contentType: "markdown",
+          emitUpdate: false,
+        });
       }
       hasChangesRef.current = false;
       setHasChanges(false);

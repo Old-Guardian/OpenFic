@@ -249,7 +249,10 @@ export function EntryEditor({
       setName(baseline.name);
       setAliases(baseline.aliases);
       setTokenCount(countTokens(baseline.content));
-      editorRef.current?.commands.setContent(baseline.content);
+      editorRef.current?.commands.setContent(baseline.content, {
+        contentType: "markdown",
+        emitUpdate: false,
+      });
       hasChangesRef.current = false;
       setHasChanges(false);
     },
