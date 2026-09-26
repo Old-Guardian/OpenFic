@@ -21,7 +21,7 @@ from app.storage.database import ALEMBIC_INI_PATH
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "app" / "storage" / "migrations"
 LEGACY_HEAD = "1023"
-HEAD = "1024"
+HEAD = "1026"
 
 _ALIAS_TABLES = {"world_info_entry_aliases", "character_aliases"}
 _ALIAS_COLUMNS = {"id", "alias", "normalized_alias", "position"}
