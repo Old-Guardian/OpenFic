@@ -5,6 +5,7 @@
  */
 
 import type { IndexAutoStrategy, IndexMode } from "@/lib/index-status";
+import type { ReasoningEffort } from "@/lib/model.types";
 import type { ThemeConfig, ThemeConfigResponse, ThemeMode, ThemePresetId } from "@/lib/theme";
 
 export type { ThemeMode } from "@/lib/theme";
@@ -38,7 +39,10 @@ export interface Settings {
   editorFontSize: number;
   defaultModel: string;
   lightModel: string;
+  defaultModelReasoningEffort: ReasoningEffort;
+  lightModelReasoningEffort: ReasoningEffort;
   summaryModel: string;
+  summaryModelReasoningEffort: ReasoningEffort;
   summaryAutoGenerateChapter: boolean;
   summaryAutoGenerateLongTerm: boolean;
   summaryMinChapterWordCount: number;
@@ -55,9 +59,25 @@ export interface Settings {
   indexRerankEnabled: boolean;
   defaultRerankModel: string;
   agentBypassToolApproval: boolean;
+  notificationsEnabled: boolean;
+  notifyOnCompletion: boolean;
+  notifyOnApproval: boolean;
+  notifyOnQuestion: boolean;
+  notifyOnError: boolean;
+  notifyOnlyWhenUnfocused: boolean;
   agentToolPermissions: AgentToolPermission[];
   auditPersistDetails: boolean;
   compressSystemPrompts: boolean;
+  autoCompactContext: boolean;
+  compactionModel: string;
+  compactionModelReasoningEffort: ReasoningEffort;
+  compactionTriggerRatio: number;
+  compactionTailTokenBudget: number;
+  compactionTailWindowRatio: number;
+  compactionMinCompactableTokens: number;
+  autoPruneToolOutputs: boolean;
+  pruneProtectedTokens: number;
+  pruneMinimumTokens: number;
   telemetryEnabled: boolean;
   editorAutoSave: boolean;
   editorAutoIndent: boolean;
@@ -80,7 +100,10 @@ export interface SettingsResponse {
   editor_font_size?: number;
   default_model: string;
   light_model: string;
+  default_model_reasoning_effort: ReasoningEffort;
+  light_model_reasoning_effort: ReasoningEffort;
   summary_model: string;
+  summary_model_reasoning_effort: ReasoningEffort;
   summary_auto_generate_chapter: boolean;
   summary_auto_generate_long_term: boolean;
   summary_min_chapter_word_count: number;
@@ -97,12 +120,28 @@ export interface SettingsResponse {
   index_rerank_enabled: boolean;
   default_rerank_model: string;
   agent_bypass_tool_approval: boolean;
+  notifications_enabled: boolean;
+  notify_on_completion: boolean;
+  notify_on_approval: boolean;
+  notify_on_question: boolean;
+  notify_on_error: boolean;
+  notify_only_when_unfocused: boolean;
   agent_tool_permissions: Array<{
     tool_name: string;
     mode: AgentToolPermissionMode;
   }>;
   audit_persist_details: boolean;
   compress_system_prompts: boolean;
+  auto_compact_context: boolean;
+  compaction_model: string;
+  compaction_model_reasoning_effort: ReasoningEffort;
+  compaction_trigger_ratio: number;
+  compaction_tail_token_budget: number;
+  compaction_tail_window_ratio: number;
+  compaction_min_compactable_tokens: number;
+  auto_prune_tool_outputs: boolean;
+  prune_protected_tokens: number;
+  prune_minimum_tokens: number;
   telemetry_enabled: boolean;
   editor_auto_save?: boolean;
   editor_auto_indent?: boolean;
@@ -125,7 +164,10 @@ export interface SettingsUpdateRequest {
   editor_font_size?: number;
   default_model?: string;
   light_model?: string;
+  default_model_reasoning_effort?: ReasoningEffort;
+  light_model_reasoning_effort?: ReasoningEffort;
   summary_model?: string;
+  summary_model_reasoning_effort?: ReasoningEffort;
   summary_auto_generate_chapter?: boolean;
   summary_auto_generate_long_term?: boolean;
   summary_min_chapter_word_count?: number;
@@ -143,12 +185,28 @@ export interface SettingsUpdateRequest {
   index_rerank_enabled?: boolean;
   default_rerank_model?: string;
   agent_bypass_tool_approval?: boolean;
+  notifications_enabled?: boolean;
+  notify_on_completion?: boolean;
+  notify_on_approval?: boolean;
+  notify_on_question?: boolean;
+  notify_on_error?: boolean;
+  notify_only_when_unfocused?: boolean;
   agent_tool_permissions?: Array<{
     tool_name: string;
     mode: AgentToolPermissionMode;
   }>;
   audit_persist_details?: boolean;
   compress_system_prompts?: boolean;
+  auto_compact_context?: boolean;
+  compaction_model?: string;
+  compaction_model_reasoning_effort?: ReasoningEffort;
+  compaction_trigger_ratio?: number;
+  compaction_tail_token_budget?: number;
+  compaction_tail_window_ratio?: number;
+  compaction_min_compactable_tokens?: number;
+  auto_prune_tool_outputs?: boolean;
+  prune_protected_tokens?: number;
+  prune_minimum_tokens?: number;
   telemetry_enabled?: boolean;
   editor_auto_save?: boolean;
   editor_auto_indent?: boolean;

@@ -256,6 +256,93 @@ async def test_compact_window_persists_raw_summary_and_emits_events_and_usage(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model_reference", ["__system_light_model__", "dedicated-model-record"])
+@pytest.mark.parametrize("provider_type", ["openai", "google-vertex"])
+async def test_compact_window_uses_selected_light_model(
+    db_session: AsyncSession,
+    state: AgentRuntimeState,
+    window: CompactionWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    model_reference: str,
+    provider_type: str,
+) -> None:
+    selected_configs: list[object] = []
+    vertex_connection = object()
+
+    def fake_factory(config):
+        selected_configs.append(config)
+        return FakeModel(_ai_message("摘要正文"))
+
+    monkeypatch.setattr(
+        "app.agent_runtime.context.compaction.service.prompt_chain_service.get_latest_version_with_entries_or_default",
+        AsyncMock(return_value=_prompt_version()),
+    )
+    async def lookup_setting(_session, key: str):
+        return SimpleNamespace(value="light-record" if key == "light_model" else "high")
+
+    setting_lookup = AsyncMock(side_effect=lookup_setting)
+    monkeypatch.setattr(
+        "app.agent_runtime.context.compaction.service.setting_repo.get_by_key",
+        setting_lookup,
+    )
+    record_lookup = AsyncMock(return_value=SimpleNamespace(
+        provider_id="provider", model_id="light-llm", temperature=None,
+        top_p=None, top_k=None, min_p=None, top_a=None, max_tokens=None,
+        frequency_penalty=None, presence_penalty=None, repetition_penalty=None,
+    ))
+    monkeypatch.setattr(
+        "app.agent_runtime.context.compaction.service.model_repo.get_by_id",
+        record_lookup,
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.context.compaction.service.model_provider_repo.get_by_id",
+        AsyncMock(return_value=SimpleNamespace(
+            provider_type=provider_type, url="https://example.test", api_key_encrypted="key",
+        )),
+    )
+    def decrypt_key(_self, _key):
+        if provider_type == "google-vertex":
+            raise AssertionError("Vertex must not decrypt the API key")
+        return "decrypted"
+
+    monkeypatch.setattr(
+        "app.agent_runtime.context.compaction.service.EncryptionService.decrypt",
+        decrypt_key,
+    )
+    vertex_lookup = AsyncMock(return_value=vertex_connection)
+    monkeypatch.setattr(
+        "app.agent_runtime.context.compaction.service.ModelProviderService.resolve_vertex_connection_context",
+        vertex_lookup,
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.context.compaction.service.ModelProviderService.get_decrypted_custom_headers",
+        lambda _self, _provider: {},
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.context.compaction.service.create_chat_model", fake_factory,
+    )
+    await compact_window(
+        db_session, state=state, window=window, trigger="manual",
+        model_reference=model_reference,
+    )
+    assert selected_configs[0].model_id == "light-llm"
+    assert selected_configs[0].session_id == "session_test"
+    assert selected_configs[0].reasoning_effort == "high"
+    if provider_type == "google-vertex":
+        assert selected_configs[0].vertex_connection is vertex_connection
+        assert selected_configs[0].api_key == ""
+        vertex_lookup.assert_awaited_once()
+    else:
+        assert selected_configs[0].api_key == "decrypted"
+        vertex_lookup.assert_not_awaited()
+    record_lookup.assert_awaited_once_with(
+        db_session, "light-record" if model_reference == "__system_light_model__" else model_reference
+    )
+    if model_reference == "dedicated-model-record":
+        setting_lookup.assert_awaited_once_with(db_session, "compaction_model_reasoning_effort")
+
+
+@pytest.mark.asyncio
 async def test_compact_window_appends_current_plan_when_outside_window_has_no_write_plan(
     db_session: AsyncSession,
     state: AgentRuntimeState,

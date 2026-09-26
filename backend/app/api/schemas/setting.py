@@ -5,7 +5,15 @@ Setting API Schemas - 设置请求/响应模型。
 
 from pydantic import BaseModel, Field
 
+from app.agent_runtime.context.settings import ContextSettings
 from app.memory.summary_config import DEFAULT_SUMMARY_MODEL
+from app.models.clients.model_params import (
+    DEFAULT_REASONING_EFFORT,
+    ReasoningEffort,
+    ReasoningEffortInput,
+)
+
+_context_defaults = ContextSettings()
 
 
 class AgentToolPermissionItem(BaseModel):
@@ -77,7 +85,19 @@ class SettingsResponse(BaseModel):
     editor_font_size: int = Field(default=16, description="编辑器字号（px）")
     default_model: str = Field(default="", description="默认模型 ID")
     light_model: str = Field(default="", description="轻量模型 ID")
+    default_model_reasoning_effort: ReasoningEffort = Field(
+        default=DEFAULT_REASONING_EFFORT,
+        description="默认模型推理强度",
+    )
+    light_model_reasoning_effort: ReasoningEffort = Field(
+        default=DEFAULT_REASONING_EFFORT,
+        description="轻量模型推理强度",
+    )
     summary_model: str = Field(default=DEFAULT_SUMMARY_MODEL, description="摘要模型引用")
+    summary_model_reasoning_effort: ReasoningEffort = Field(
+        default=DEFAULT_REASONING_EFFORT,
+        description="指定摘要模型时的推理强度",
+    )
     summary_auto_generate_chapter: bool = Field(
         default=True,
         description="是否自动生成章节摘要",
@@ -126,6 +146,12 @@ class SettingsResponse(BaseModel):
         default=False,
         description="是否全局放行 Agent 工具审批",
     )
+    notifications_enabled: bool = Field(default=False, description="是否启用会话系统通知")
+    notify_on_completion: bool = Field(default=True, description="会话完成时通知")
+    notify_on_approval: bool = Field(default=True, description="待审批时通知")
+    notify_on_question: bool = Field(default=True, description="待回答问题时通知")
+    notify_on_error: bool = Field(default=True, description="Agent 运行出错时通知")
+    notify_only_when_unfocused: bool = Field(default=True, description="仅在窗口未聚焦时通知")
     agent_tool_permissions: list[AgentToolPermissionItem] = Field(
         default_factory=list, description="Agent 工具权限设置"
     )
@@ -150,6 +176,19 @@ class SettingsResponse(BaseModel):
         default=False,
         description="输入半角标点符号时是否自动转换为全角",
     )
+    auto_compact_context: bool = _context_defaults.auto_compact_context
+    compaction_model: str = "__session_model__"
+    compaction_model_reasoning_effort: ReasoningEffort = Field(
+        default=DEFAULT_REASONING_EFFORT,
+        description="指定上下文压缩模型时的推理强度",
+    )
+    compaction_trigger_ratio: float = Field(default=_context_defaults.compaction_trigger_ratio, gt=0, le=1)
+    compaction_tail_token_budget: int = Field(default=_context_defaults.compaction_tail_token_budget, gt=0)
+    compaction_tail_window_ratio: float = Field(default=_context_defaults.compaction_tail_window_ratio, gt=0, le=1)
+    compaction_min_compactable_tokens: int = Field(default=_context_defaults.compaction_min_compactable_tokens, gt=0)
+    auto_prune_tool_outputs: bool = _context_defaults.auto_prune_tool_outputs
+    prune_protected_tokens: int = Field(default=_context_defaults.prune_protected_tokens, gt=0)
+    prune_minimum_tokens: int = Field(default=_context_defaults.prune_minimum_tokens, gt=0)
     editor_auto_pair_symbols: bool = Field(
         default=False,
         description="输入成对符号的左符号时是否自动补齐右符号",
@@ -175,10 +214,35 @@ class SettingsUpdateRequest(BaseModel):
     editor_font_size: int | None = Field(default=None, description="编辑器字号（px）")
     default_model: str | None = Field(default=None, description="默认模型 ID")
     light_model: str | None = Field(default=None, description="轻量模型 ID")
+    default_model_reasoning_effort: ReasoningEffortInput | None = Field(
+        default=None,
+        description="默认模型推理强度",
+    )
+    light_model_reasoning_effort: ReasoningEffortInput | None = Field(
+        default=None,
+        description="轻量模型推理强度",
+    )
     summary_model: str | None = Field(
         default=None,
         description="摘要模型 ID，空值时跟随轻量模型",
     )
+    summary_model_reasoning_effort: ReasoningEffortInput | None = Field(
+        default=None,
+        description="指定摘要模型时的推理强度",
+    )
+    auto_compact_context: bool | None = None
+    compaction_model: str | None = Field(default=None, min_length=1)
+    compaction_model_reasoning_effort: ReasoningEffortInput | None = Field(
+        default=None,
+        description="指定上下文压缩模型时的推理强度",
+    )
+    compaction_trigger_ratio: float | None = Field(default=None, gt=0, le=1)
+    compaction_tail_token_budget: int | None = Field(default=None, gt=0)
+    compaction_tail_window_ratio: float | None = Field(default=None, gt=0, le=1)
+    compaction_min_compactable_tokens: int | None = Field(default=None, gt=0)
+    auto_prune_tool_outputs: bool | None = None
+    prune_protected_tokens: int | None = Field(default=None, gt=0)
+    prune_minimum_tokens: int | None = Field(default=None, gt=0)
     summary_auto_generate_chapter: bool | None = Field(
         default=None,
         description="是否自动生成章节摘要",
@@ -235,6 +299,12 @@ class SettingsUpdateRequest(BaseModel):
         default=None,
         description="是否全局放行 Agent 工具审批",
     )
+    notifications_enabled: bool | None = Field(default=None, description="是否启用会话系统通知")
+    notify_on_completion: bool | None = None
+    notify_on_approval: bool | None = None
+    notify_on_question: bool | None = None
+    notify_on_error: bool | None = None
+    notify_only_when_unfocused: bool | None = None
     agent_tool_permissions: list[AgentToolPermissionItem] | None = Field(
         default=None, description="Agent 工具权限设置"
     )

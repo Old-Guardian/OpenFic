@@ -71,7 +71,8 @@ DEFAULT_AGENT_DEFINITIONS: Mapping[str, AgentDefinition] = MappingProxyType(
                 "note_read",
                 "note_write",
                 "character_read",
-                "character_write"
+                "character_write",
+                "character_relationship",
             ),
             enabled_skills=(),
             metadata=MappingProxyType({}),
@@ -103,6 +104,7 @@ DEFAULT_AGENT_DEFINITIONS: Mapping[str, AgentDefinition] = MappingProxyType(
                 "world_read",
                 "note_read",
                 "character_read",
+                "character_relationship",
             ),
             enabled_skills=(),
             metadata=MappingProxyType({}),
@@ -132,7 +134,8 @@ DEFAULT_AGENT_DEFINITIONS: Mapping[str, AgentDefinition] = MappingProxyType(
                 "web_search",
                 "web_fetch",
                 "note_read",
-                "character_read"
+                "character_read",
+                "character_relationship",
             ),
             enabled_skills=(),
             metadata=MappingProxyType({}),
@@ -154,7 +157,8 @@ DEFAULT_AGENT_DEFINITIONS: Mapping[str, AgentDefinition] = MappingProxyType(
                 "note_read",
                 "note_write",
                 "character_read",
-                "character_write"
+                "character_write",
+                "character_relationship",
             ),
             enabled_skills=(),
             metadata=MappingProxyType({}),
@@ -173,7 +177,8 @@ DEFAULT_AGENT_DEFINITIONS: Mapping[str, AgentDefinition] = MappingProxyType(
                 "world_read",
                 "plan",
                 "note_read",
-                "character_read"
+                "character_read",
+                "character_relationship",
             ),
             enabled_skills=(),
             metadata=MappingProxyType({}),
@@ -194,7 +199,8 @@ DEFAULT_AGENT_DEFINITIONS: Mapping[str, AgentDefinition] = MappingProxyType(
                 "chapter_write",
                 "note_read",
                 "note_write",
-                "character_read"
+                "character_read",
+                "character_relationship",
             ),
             enabled_skills=(),
             metadata=MappingProxyType({}),
@@ -217,7 +223,8 @@ DEFAULT_AGENT_DEFINITIONS: Mapping[str, AgentDefinition] = MappingProxyType(
                 "note_read",
                 "note_write",
                 "character_read",
-                "character_write"
+                "character_write",
+                "character_relationship",
             ),
             enabled_skills=(),
             metadata=MappingProxyType({}),
@@ -236,7 +243,8 @@ DEFAULT_AGENT_DEFINITIONS: Mapping[str, AgentDefinition] = MappingProxyType(
                 "world_read",
                 "plan",
                 "character_read",
-                "note_read"
+                "character_relationship",
+                "note_read",
             ),
             enabled_skills=(),
             metadata=MappingProxyType({}),

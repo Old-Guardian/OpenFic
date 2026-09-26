@@ -56,6 +56,7 @@ from app.memory.summary_config import (
     DEFAULT_SUMMARY_LONG_TERM_INTERVAL,
     DEFAULT_SUMMARY_LONG_TERM_TARGET_LENGTH,
     DEFAULT_SUMMARY_MIN_CHAPTER_WORD_COUNT,
+    SETTING_KEY_SUMMARY_MODEL_REASONING_EFFORT,
     DEFAULT_SUMMARY_MODEL,
     SETTING_KEY_SUMMARY_AUTO_GENERATE_CHAPTER,
     SETTING_KEY_SUMMARY_AUTO_GENERATE_LONG_TERM,
@@ -66,6 +67,12 @@ from app.memory.summary_config import (
     SETTING_KEY_SUMMARY_MIN_CHAPTER_WORD_COUNT,
     SETTING_KEY_SUMMARY_MODEL,
     parse_summary_settings,
+)
+from app.agent_runtime.context.settings import parse_context_settings
+from app.models.clients.model_params import (
+    DEFAULT_REASONING_EFFORT,
+    ReasoningEffort,
+    normalize_reasoning_effort,
 )
 from app.memory.chapter.summary_service import invalidate_all_long_term_summaries
 from app.retrieval.chapter_index import (
@@ -110,13 +117,21 @@ DEFAULT_BASE_FONT_SIZE = 14
 DEFAULT_EDITOR_FONT_SIZE = 16
 SETTING_KEY_DEFAULT_MODEL = "default_model"
 SETTING_KEY_LIGHT_MODEL = "light_model"
+SETTING_KEY_DEFAULT_MODEL_REASONING_EFFORT = "default_model_reasoning_effort"
+SETTING_KEY_LIGHT_MODEL_REASONING_EFFORT = "light_model_reasoning_effort"
 SETTING_KEY_DEFAULT_EMBEDDING_MODEL = "default_embedding_model"
+SETTING_KEY_COMPACTION_MODEL_REASONING_EFFORT = "compaction_model_reasoning_effort"
 SETTING_KEY_AUDIT_PERSIST_DETAILS = AUDIT_DETAILS_PERSISTENCE_SETTING_KEY
 SETTING_KEY_EDITOR_AUTO_SAVE = "editor_auto_save"
 SETTING_KEY_EDITOR_AUTO_INDENT = "editor_auto_indent"
 SETTING_KEY_EDITOR_AUTO_CONVERT_PUNCTUATION = "editor_auto_convert_punctuation"
 SETTING_KEY_EDITOR_AUTO_PAIR_SYMBOLS = "editor_auto_pair_symbols"
 SETTING_KEY_EDITOR_SHOW_LINE_NUMBERS = "editor_show_line_numbers"
+SETTING_KEY_NOTIFICATIONS_ENABLED = "notifications_enabled"
+SETTING_KEY_NOTIFY_ONLY_WHEN_UNFOCUSED = "notify_only_when_unfocused"
+NOTIFICATION_EVENT_KEYS = (
+    "notify_on_completion", "notify_on_approval", "notify_on_question", "notify_on_error",
+)
 # 默认值
 DEFAULT_SETTINGS = {
     SETTING_KEY_LANGUAGE: "zh-CN",
@@ -131,7 +146,10 @@ DEFAULT_SETTINGS = {
     SETTING_KEY_EDITOR_FONT_SIZE: "16",
     SETTING_KEY_DEFAULT_MODEL: "",
     SETTING_KEY_LIGHT_MODEL: "",
+    SETTING_KEY_DEFAULT_MODEL_REASONING_EFFORT: DEFAULT_REASONING_EFFORT,
+    SETTING_KEY_LIGHT_MODEL_REASONING_EFFORT: DEFAULT_REASONING_EFFORT,
     SETTING_KEY_SUMMARY_MODEL: DEFAULT_SUMMARY_MODEL,
+    SETTING_KEY_SUMMARY_MODEL_REASONING_EFFORT: DEFAULT_REASONING_EFFORT,
     SETTING_KEY_SUMMARY_AUTO_GENERATE_CHAPTER: json.dumps(
         DEFAULT_SUMMARY_AUTO_GENERATE_CHAPTER,
         ensure_ascii=False,
@@ -156,7 +174,11 @@ DEFAULT_SETTINGS = {
     ),
     SETTING_KEY_DEFAULT_RERANK_MODEL: DEFAULT_INDEX_RERANK_MODEL,
     SETTING_KEY_AGENT_BYPASS_TOOL_APPROVAL: "false",
+    SETTING_KEY_NOTIFICATIONS_ENABLED: "false",
+    SETTING_KEY_NOTIFY_ONLY_WHEN_UNFOCUSED: "true",
+    **{key: "true" for key in NOTIFICATION_EVENT_KEYS},
     SETTING_KEY_AGENT_TOOL_PERMISSIONS: "[]",
+    SETTING_KEY_COMPACTION_MODEL_REASONING_EFFORT: DEFAULT_REASONING_EFFORT,
     SETTING_KEY_AUDIT_PERSIST_DETAILS: "false",
     SETTING_KEY_COMPRESS_SYSTEM_PROMPTS: "false",
     SETTING_KEY_TELEMETRY_ENABLED: "true",
@@ -289,6 +311,16 @@ def _parse_int_setting(raw_value: str | None, *, default: int) -> int:
         return default
 
 
+def _parse_reasoning_effort_setting(
+    raw_value: str | None,
+    *,
+    default: ReasoningEffort = DEFAULT_REASONING_EFFORT,
+) -> ReasoningEffort:
+    if raw_value is None:
+        return default
+    return normalize_reasoning_effort(raw_value, default=default)
+
+
 @router.get(
     "",
     response_model=SettingsResponse,
@@ -312,6 +344,7 @@ async def get_settings(
     # 将设置列表转换为字典
     settings_dict = {s.key: s.value for s in settings_list}
     summary_settings = parse_summary_settings(settings_dict)
+    context_settings = parse_context_settings(settings_dict)
     agent_tool_permissions = _merge_default_agent_tool_permissions(
         _parse_agent_tool_permissions(
             settings_dict.get(
@@ -364,7 +397,20 @@ code_font_family=settings_dict.get(
         light_model=settings_dict.get(
             SETTING_KEY_LIGHT_MODEL, DEFAULT_SETTINGS[SETTING_KEY_LIGHT_MODEL]
         ),
+        default_model_reasoning_effort=_parse_reasoning_effort_setting(
+            settings_dict.get(
+                SETTING_KEY_DEFAULT_MODEL_REASONING_EFFORT,
+                DEFAULT_SETTINGS[SETTING_KEY_DEFAULT_MODEL_REASONING_EFFORT],
+            )
+        ),
+        light_model_reasoning_effort=_parse_reasoning_effort_setting(
+            settings_dict.get(
+                SETTING_KEY_LIGHT_MODEL_REASONING_EFFORT,
+                DEFAULT_SETTINGS[SETTING_KEY_LIGHT_MODEL_REASONING_EFFORT],
+            )
+        ),
         summary_model=summary_settings.model_id,
+        summary_model_reasoning_effort=summary_settings.model_reasoning_effort,
         summary_auto_generate_chapter=summary_settings.auto_generate_chapter,
         summary_auto_generate_long_term=summary_settings.auto_generate_long_term,
         summary_min_chapter_word_count=summary_settings.min_chapter_word_count,
@@ -466,6 +512,40 @@ code_font_family=settings_dict.get(
             ),
             default=False,
         ),
+        notifications_enabled=_parse_bool_setting(
+            settings_dict.get(
+                SETTING_KEY_NOTIFICATIONS_ENABLED,
+                DEFAULT_SETTINGS[SETTING_KEY_NOTIFICATIONS_ENABLED],
+            ),
+            default=False,
+        ),
+        notify_on_completion=_parse_bool_setting(
+            settings_dict.get("notify_on_completion", DEFAULT_SETTINGS["notify_on_completion"]),
+            default=True,
+        ),
+        notify_on_approval=_parse_bool_setting(
+            settings_dict.get("notify_on_approval", DEFAULT_SETTINGS["notify_on_approval"]),
+            default=True,
+        ),
+        notify_on_question=_parse_bool_setting(
+            settings_dict.get("notify_on_question", DEFAULT_SETTINGS["notify_on_question"]),
+            default=True,
+        ),
+        notify_on_error=_parse_bool_setting(
+            settings_dict.get("notify_on_error", DEFAULT_SETTINGS["notify_on_error"]),
+            default=True,
+        ),
+        notify_only_when_unfocused=_parse_bool_setting(
+            settings_dict.get(
+                SETTING_KEY_NOTIFY_ONLY_WHEN_UNFOCUSED,
+                DEFAULT_SETTINGS[SETTING_KEY_NOTIFY_ONLY_WHEN_UNFOCUSED],
+            ),
+            default=True,
+        ),
+        **{
+            key: getattr(context_settings, key)
+            for key in context_settings.__dataclass_fields__
+        },
         editor_auto_pair_symbols=_parse_bool_setting(
             settings_dict.get(
                 SETTING_KEY_EDITOR_AUTO_PAIR_SYMBOLS,
@@ -516,7 +596,10 @@ async def update_settings(
         for value in (
             request.default_model,
             request.light_model,
+            request.default_model_reasoning_effort,
+            request.light_model_reasoning_effort,
             request.summary_model,
+            request.summary_model_reasoning_effort,
             request.default_embedding_model,
             request.index_mode,
             request.index_enabled_projects,
@@ -525,6 +608,7 @@ async def update_settings(
             request.index_auto_strategy,
             request.index_rerank_enabled,
             request.default_rerank_model,
+            request.compaction_model_reasoning_effort,
         )
     )
     if is_restricted_update:
@@ -578,8 +662,20 @@ async def update_settings(
         settings_to_update[SETTING_KEY_DEFAULT_MODEL] = request.default_model
     if request.light_model is not None:
         settings_to_update[SETTING_KEY_LIGHT_MODEL] = request.light_model
+    if request.default_model_reasoning_effort is not None:
+        settings_to_update[SETTING_KEY_DEFAULT_MODEL_REASONING_EFFORT] = (
+            normalize_reasoning_effort(request.default_model_reasoning_effort)
+        )
+    if request.light_model_reasoning_effort is not None:
+        settings_to_update[SETTING_KEY_LIGHT_MODEL_REASONING_EFFORT] = (
+            normalize_reasoning_effort(request.light_model_reasoning_effort)
+        )
     if request.summary_model is not None:
         settings_to_update[SETTING_KEY_SUMMARY_MODEL] = request.summary_model.strip()
+    if request.summary_model_reasoning_effort is not None:
+        settings_to_update[SETTING_KEY_SUMMARY_MODEL_REASONING_EFFORT] = (
+            normalize_reasoning_effort(request.summary_model_reasoning_effort)
+        )
     if request.summary_auto_generate_chapter is not None:
         settings_to_update[SETTING_KEY_SUMMARY_AUTO_GENERATE_CHAPTER] = json.dumps(
             request.summary_auto_generate_chapter,
@@ -682,6 +778,18 @@ async def update_settings(
             request.agent_bypass_tool_approval,
             ensure_ascii=False,
         )
+    if request.notifications_enabled is not None:
+        settings_to_update[SETTING_KEY_NOTIFICATIONS_ENABLED] = json.dumps(
+            request.notifications_enabled,
+        )
+    if request.notify_only_when_unfocused is not None:
+        settings_to_update[SETTING_KEY_NOTIFY_ONLY_WHEN_UNFOCUSED] = json.dumps(
+            request.notify_only_when_unfocused,
+        )
+    for key in NOTIFICATION_EVENT_KEYS:
+        value = getattr(request, key)
+        if value is not None:
+            settings_to_update[key] = json.dumps(value)
     if request.agent_tool_permissions is not None:
         settings_to_update[SETTING_KEY_AGENT_TOOL_PERMISSIONS] = json.dumps(
             [item.model_dump(mode="json") for item in request.agent_tool_permissions],
@@ -718,6 +826,20 @@ async def update_settings(
             request.editor_auto_convert_punctuation,
             ensure_ascii=False,
         )
+    for key in (
+        "auto_compact_context", "compaction_model", "compaction_model_reasoning_effort",
+        "compaction_trigger_ratio",
+        "compaction_tail_token_budget", "compaction_tail_window_ratio",
+        "compaction_min_compactable_tokens", "auto_prune_tool_outputs",
+        "prune_protected_tokens", "prune_minimum_tokens",
+    ):
+        value = getattr(request, key)
+        if value is not None:
+            settings_to_update[key] = (
+                normalize_reasoning_effort(value)
+                if key.endswith("_reasoning_effort")
+                else value if isinstance(value, str) else json.dumps(value)
+            )
     if request.editor_auto_pair_symbols is not None:
         settings_to_update[SETTING_KEY_EDITOR_AUTO_PAIR_SYMBOLS] = json.dumps(
             request.editor_auto_pair_symbols,

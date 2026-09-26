@@ -367,6 +367,7 @@ const fixtureCharacter: Character = {
   name: fixture.name,
   description: fixture.description,
   aliases: fixture.aliases,
+  relationshipCount: 0,
   imageUrl: null,
   isFavorited: false,
   createdAt: "2026-09-23T00:00:00Z",
@@ -420,6 +421,7 @@ function EntityRegressionHarness({
     tokenCount: listCount,
     isFavorited: savedCharacter.isFavorited,
     aliases: savedCharacter.aliases,
+    relationshipCount: savedCharacter.relationshipCount,
     createdAt: savedCharacter.createdAt,
     updatedAt: savedCharacter.updatedAt,
   };
@@ -460,12 +462,15 @@ function EntityRegressionHarness({
             <div data-testid="character-token-list">
               <CharacterList
                 characters={[listItem]}
+                graph={undefined}
+                view="editor"
                 projectId={fixtureProject.id}
                 projects={[fixtureProject]}
                 currentProjectId={fixtureProject.id}
                 selectedCharacterId={savedCharacter.id}
                 onSelectProject={() => {}}
                 onCreateCharacter={() => {}}
+                onToggleView={() => {}}
                 onSelectCharacter={() => {}}
                 onEditProfile={() => {}}
                 onDeleteCharacter={() => {}}

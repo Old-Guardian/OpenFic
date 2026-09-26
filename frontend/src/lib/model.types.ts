@@ -17,6 +17,7 @@ export interface VertexProviderConfig {
   auth_mode?: "adc" | "service_account";
   [key: string]: unknown;
 }
+export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /** 模型服务提供商 */
 export interface ModelProvider {

@@ -88,6 +88,7 @@ from app.core.encryption import EncryptionService
 from app.core.errors import NotFoundError
 from app.core.ids import generate_id
 from app.models.clients.google_vertex_auth import VertexAuthError
+from app.models.clients.model_params import normalize_reasoning_effort
 from app.models.repos import model_provider_repo, model_repo
 from app.models.services.model_provider_service import ModelProviderService
 from app.models.vertex_config import VERTEX_PROVIDER_TYPE, VertexConfigError
@@ -157,6 +158,10 @@ TOOL_DISPLAY_ORDER = {
     "reference_skill": 44,
     "web_search": 45,
     "web_fetch": 46,
+    "query_character_relationships": 47,
+    "create_character_relationship": 48,
+    "edit_character_relationship": 49,
+    "delete_character_relationship": 50,
 }
 
 def _build_default_agent_session_title(created_at: datetime) -> str:
@@ -500,8 +505,8 @@ async def _build_model_config(
         "presence_penalty": model.presence_penalty,
         "repetition_penalty": model.repetition_penalty,
     }
-    if reasoning_effort and reasoning_effort != "off":
-        model_config["reasoning_effort"] = reasoning_effort
+    if reasoning_effort is not None:
+        model_config["reasoning_effort"] = normalize_reasoning_effort(reasoning_effort)
     if custom_headers:
         model_config["custom_headers"] = custom_headers
     if vertex_connection is not None:
@@ -565,6 +570,20 @@ async def _resolve_model_config(
 
     encryption_service = EncryptionService(settings.encryption_key)
     provider_service = ModelProviderService(encryption_service)
+
+    if reasoning_effort is None:
+        for model_setting_key, effort_setting_key in (
+            ("default_model", "default_model_reasoning_effort"),
+            ("light_model", "light_model_reasoning_effort"),
+        ):
+            configured_model = await setting_repo.get_by_key(session, model_setting_key)
+            if configured_model is None or configured_model.value.strip() != model.id:
+                continue
+            effort_setting = await setting_repo.get_by_key(session, effort_setting_key)
+            reasoning_effort = normalize_reasoning_effort(
+                effort_setting.value if effort_setting else None
+            )
+            break
 
     if provider.provider_type == VERTEX_PROVIDER_TYPE:
         # Vertex：在调用边界解析连接上下文（解密 + ADC/Service Account 解析），

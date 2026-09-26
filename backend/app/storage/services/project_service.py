@@ -15,6 +15,7 @@ from app.storage.models.project import Project
 from app.storage.repos import (
     chapter_repo,
     character_repo,
+    character_relationship_repo,
     project_repo,
     volume_repo,
     world_info_entry_repo,
@@ -175,6 +176,8 @@ async def delete_project(session: AsyncSession, project_id: str) -> None:
         NotFoundError: 项目不存在。
     """
     project = await get_project(session, project_id)
+
+    await character_relationship_repo.remove_for_project(session, project_id)
 
     await task_service.delete_all_tasks(session, project_id)
     await delete_revision_data_by_project(session, project_id)

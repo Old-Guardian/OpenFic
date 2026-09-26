@@ -59,6 +59,7 @@ test.describe("T6: 别名数据结构、校验与缓存行为", () => {
       imageUrl: null,
       isFavorited: false,
       aliases: ["盗帅", "香帅"],
+      relationshipCount: 0,
       createdAt: "2026-09-18T00:00:00Z",
       updatedAt: "2026-09-18T00:00:00Z",
     };
@@ -73,6 +74,7 @@ test.describe("T6: 别名数据结构、校验与缓存行为", () => {
       tokenCount: 10,
       isFavorited: rawCharacter.isFavorited,
       aliases: rawCharacter.aliases,
+      relationshipCount: 0,
       createdAt: rawCharacter.createdAt,
       updatedAt: rawCharacter.updatedAt,
     };

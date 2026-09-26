@@ -10,6 +10,7 @@ export interface Character {
   aliases: string[];
   createdAt: string;
   updatedAt: string;
+  relationshipCount: number;
 }
 
 export interface CharacterListItem {
@@ -22,6 +23,27 @@ export interface CharacterListItem {
   aliases: string[];
   createdAt: string;
   updatedAt: string;
+  relationshipCount: number;
+}
+
+export interface CharacterRelationship {
+  id: string;
+  sourceCharacterId: string;
+  targetCharacterId: string;
+  name: string;
+  description: string;
+}
+
+export interface CharacterGraph {
+  nodes: {
+    characterId: string;
+    name: string;
+    imageUrl: string | null;
+    x: number | null;
+    y: number | null;
+    relationshipCount: number;
+  }[];
+  relationships: CharacterRelationship[];
 }
 
 export interface CharacterCreate {

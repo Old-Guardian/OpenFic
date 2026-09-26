@@ -21,11 +21,13 @@ EXPECTED_AGENT_TOOL_PERMISSIONS = [
     {"tool_name": "activate_skill", "mode": "allow"},
     {"tool_name": "ask_user", "mode": "allow"},
     {"tool_name": "create_character", "mode": "ask"},
+    {"tool_name": "create_character_relationship", "mode": "ask"},
     {"tool_name": "create_note_category", "mode": "ask"},
     {"tool_name": "create_volume", "mode": "ask"},
     {"tool_name": "create_world_entry", "mode": "ask"},
     {"tool_name": "delete_chapter", "mode": "ask"},
     {"tool_name": "delete_character", "mode": "ask"},
+    {"tool_name": "delete_character_relationship", "mode": "ask"},
     {"tool_name": "delete_note", "mode": "ask"},
     {"tool_name": "delete_note_category", "mode": "ask"},
     {"tool_name": "delete_volume", "mode": "ask"},
@@ -33,6 +35,7 @@ EXPECTED_AGENT_TOOL_PERMISSIONS = [
     {"tool_name": "dispatch_subagent", "mode": "allow"},
     {"tool_name": "edit_chapter", "mode": "ask"},
     {"tool_name": "edit_character", "mode": "ask"},
+    {"tool_name": "edit_character_relationship", "mode": "ask"},
     {"tool_name": "edit_note", "mode": "ask"},
     {"tool_name": "edit_note_category", "mode": "ask"},
     {"tool_name": "edit_volume", "mode": "ask"},
@@ -47,6 +50,7 @@ EXPECTED_AGENT_TOOL_PERMISSIONS = [
     {"tool_name": "move_chapter_to_volume", "mode": "ask"},
     {"tool_name": "move_note", "mode": "ask"},
     {"tool_name": "notify_subagent", "mode": "allow"},
+    {"tool_name": "query_character_relationships", "mode": "allow"},
     {"tool_name": "read_chapter", "mode": "allow"},
     {"tool_name": "read_chapter_summaries", "mode": "allow"},
     {"tool_name": "read_character", "mode": "allow"},
@@ -123,6 +127,32 @@ async def test_get_settings_default(client: AsyncClient) -> None:
     assert data["audit_persist_details"] is False
     assert data["compress_system_prompts"] is False
     assert data["editor_auto_save"] is True
+    assert data["base_font_size"] == 14
+    assert data["editor_font_size"] == 16
+    assert data["default_model"] == ""
+    assert data["light_model"] == ""
+    assert data["default_model_reasoning_effort"] == "medium"
+    assert data["light_model_reasoning_effort"] == "medium"
+    assert data["summary_model_reasoning_effort"] == "medium"
+    assert data["compaction_model_reasoning_effort"] == "medium"
+    assert data["default_embedding_model"] == ""
+    assert data["index_mode"] == "off"
+    assert data["index_enabled_projects"] == []
+    assert data["index_chunk_size"] == 800
+    assert data["index_chunk_overlap"] == 100
+    assert data["index_auto_strategy"] == "off"
+    assert data["index_rerank_enabled"] is False
+    assert data["default_rerank_model"] == ""
+    assert data["agent_bypass_tool_approval"] is False
+    assert data["notifications_enabled"] is False
+    assert data["notify_on_completion"] is True
+    assert data["notify_on_approval"] is True
+    assert data["notify_on_question"] is True
+    assert data["notify_on_error"] is True
+    assert data["notify_only_when_unfocused"] is True
+    assert data["agent_tool_permissions"] == EXPECTED_AGENT_TOOL_PERMISSIONS
+    assert data["audit_persist_details"] is False
+    assert data["compress_system_prompts"] is False
     assert data["editor_auto_indent"] is True
     assert data["editor_auto_convert_punctuation"] is False
     assert data["editor_auto_pair_symbols"] is False
@@ -364,6 +394,51 @@ async def test_update_settings_model_persistence(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_settings_reasoning_effort_persistence(client: AsyncClient) -> None:
+    response = await client.put(
+        "/api/v1/settings",
+        json={
+            "default_model_reasoning_effort": "high",
+            "light_model_reasoning_effort": "low",
+            "summary_model_reasoning_effort": "xhigh",
+            "compaction_model_reasoning_effort": "auto",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["default_model_reasoning_effort"] == "high"
+    assert data["light_model_reasoning_effort"] == "low"
+    assert data["summary_model_reasoning_effort"] == "xhigh"
+    assert data["compaction_model_reasoning_effort"] == "auto"
+
+    follow_up = await client.get("/api/v1/settings")
+    assert follow_up.status_code == 200
+    assert follow_up.json()["compaction_model_reasoning_effort"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_update_settings_normalizes_legacy_off_reasoning_effort(client: AsyncClient) -> None:
+    response = await client.put(
+        "/api/v1/settings",
+        json={"default_model_reasoning_effort": "off"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["default_model_reasoning_effort"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_update_settings_rejects_invalid_reasoning_effort(client: AsyncClient) -> None:
+    response = await client.put(
+        "/api/v1/settings",
+        json={"default_model_reasoning_effort": "extreme"},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_patch_settings_default_embedding_model(client: AsyncClient) -> None:
     response = await client.patch(
         "/api/v1/settings",
@@ -462,6 +537,62 @@ async def test_changing_default_embedding_model_marks_retrieval_indexes_for_rebu
         await session.execute(select(RetrievalChapterIndexState))
     ).scalars().all()
     assert [row.status for row in rows] == ["needs_rebuild"]
+
+
+@pytest.mark.asyncio
+async def test_update_settings_notifications_enabled(client: AsyncClient) -> None:
+    response = await client.put(
+        "/api/v1/settings",
+        json={"notifications_enabled": True},
+    )
+    assert response.status_code == 200
+    assert response.json()["notifications_enabled"] is True
+
+    follow_up = await client.get("/api/v1/settings")
+    assert follow_up.json()["notifications_enabled"] is True
+
+    disabled = await client.put(
+        "/api/v1/settings",
+        json={"notifications_enabled": False},
+    )
+    assert disabled.json()["notifications_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_settings_notification_events_independently(client: AsyncClient) -> None:
+    response = await client.put(
+        "/api/v1/settings",
+        json={"notify_on_completion": False, "notify_on_approval": False},
+    )
+    assert response.status_code == 200
+    assert response.json()["notify_on_completion"] is False
+    assert response.json()["notify_on_approval"] is False
+    assert response.json()["notify_on_question"] is True
+
+    follow_up = await client.get("/api/v1/settings")
+    assert follow_up.json()["notify_on_completion"] is False
+    assert follow_up.json()["notify_on_approval"] is False
+    assert follow_up.json()["notify_on_question"] is True
+
+    updated = await client.put("/api/v1/settings", json={"notify_on_question": False})
+    assert updated.json()["notify_on_question"] is False
+    assert updated.json()["notify_on_completion"] is False
+
+    error_disabled = await client.put("/api/v1/settings", json={"notify_on_error": False})
+    assert error_disabled.json()["notify_on_error"] is False
+    assert error_disabled.json()["notify_on_question"] is False
+    assert (await client.get("/api/v1/settings")).json()["notify_on_error"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_settings_notification_focus_preference(client: AsyncClient) -> None:
+    response = await client.put(
+        "/api/v1/settings",
+        json={"notify_only_when_unfocused": False},
+    )
+    assert response.status_code == 200
+    assert response.json()["notify_only_when_unfocused"] is False
+    assert (await client.get("/api/v1/settings")).json()["notify_only_when_unfocused"] is False
 
 
 @pytest.mark.asyncio
@@ -591,6 +722,57 @@ async def test_update_settings_compress_system_prompts(client: AsyncClient) -> N
     enabled_follow_up = await client.get("/api/v1/settings")
     assert enabled_follow_up.status_code == 200
     assert enabled_follow_up.json()["compress_system_prompts"] is True
+
+
+@pytest.mark.asyncio
+async def test_context_settings_defaults_and_persistence(client: AsyncClient) -> None:
+    initial = await client.get("/api/v1/settings")
+    assert initial.status_code == 200
+    assert {key: initial.json()[key] for key in (
+        "auto_compact_context", "compaction_model", "compaction_trigger_ratio",
+        "compaction_tail_token_budget", "compaction_tail_window_ratio",
+        "compaction_min_compactable_tokens", "auto_prune_tool_outputs",
+        "prune_protected_tokens", "prune_minimum_tokens",
+    )} == {
+        "auto_compact_context": True,
+        "compaction_model": "__session_model__",
+        "compaction_trigger_ratio": 0.8,
+        "compaction_tail_token_budget": 20_000,
+        "compaction_tail_window_ratio": 0.5,
+        "compaction_min_compactable_tokens": 2_000,
+        "auto_prune_tool_outputs": False,
+        "prune_protected_tokens": 100_000,
+        "prune_minimum_tokens": 20_000,
+    }
+    patch = {
+        "auto_compact_context": False,
+        "compaction_model": "dedicated-model-record",
+        "compaction_trigger_ratio": 0.65,
+        "compaction_tail_token_budget": 12_000,
+        "compaction_tail_window_ratio": 0.4,
+        "compaction_min_compactable_tokens": 1_500,
+        "auto_prune_tool_outputs": True,
+        "prune_protected_tokens": 50_000,
+        "prune_minimum_tokens": 10_000,
+    }
+    updated = await client.put("/api/v1/settings", json=patch)
+    assert updated.status_code == 200
+    assert all(updated.json()[key] == value for key, value in patch.items())
+    follow_up = await client.get("/api/v1/settings")
+    assert all(follow_up.json()[key] == value for key, value in patch.items())
+
+
+@pytest.mark.asyncio
+async def test_context_settings_reject_invalid_values(client: AsyncClient) -> None:
+    for patch in (
+        {"compaction_model": ""},
+        {"compaction_trigger_ratio": 0},
+        {"compaction_tail_window_ratio": 1.1},
+        {"compaction_tail_token_budget": 0},
+        {"prune_minimum_tokens": -1},
+    ):
+        response = await client.put("/api/v1/settings", json=patch)
+        assert response.status_code == 422
 
 
 @pytest.mark.asyncio

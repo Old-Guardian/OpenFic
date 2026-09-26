@@ -79,6 +79,7 @@ from app.settings import settings
 from app.storage.database import _get_session_factory, create_session
 from app.storage.repos import setting_repo
 from app.storage.services import task_service
+from app.models.clients.model_params import normalize_reasoning_effort
 
 
 _SUBAGENT_RESTRICTED_TOOL_NAMES = frozenset(
@@ -137,6 +138,13 @@ async def _read_setting_model_id(session: Any, key: str) -> str | None:
     setting = await setting_repo.get_by_key(session, key)
     value = setting.value.strip() if setting and setting.value else ""
     return value or None
+
+
+async def _read_setting_reasoning_effort(session: Any, key: str) -> str | None:
+    setting = await setting_repo.get_by_key(session, key)
+    if setting is None or not setting.value:
+        return None
+    return normalize_reasoning_effort(setting.value)
 
 
 async def _resolve_model_record_id(
@@ -261,6 +269,18 @@ async def _resolve_agent_model_config(
         resolved = await _build_model_config_from_record(session, record_id)
         if resolved is not None:
             reasoning_effort = inherited_config.get("reasoning_effort")
+            if reasoning_effort is None and configured_model_id == SYSTEM_LIGHT_MODEL_REFERENCE:
+                reasoning_effort = await _read_setting_reasoning_effort(
+                    session, "light_model_reasoning_effort"
+                )
+            elif reasoning_effort is None and configured_model_id in (
+                None,
+                "",
+                SYSTEM_DEFAULT_MODEL_REFERENCE,
+            ):
+                reasoning_effort = await _read_setting_reasoning_effort(
+                    session, "default_model_reasoning_effort"
+                )
             if isinstance(reasoning_effort, str):
                 resolved["reasoning_effort"] = reasoning_effort
             return apply_agent_reasoning_policy(resolved, configured_reasoning_effort)
@@ -436,21 +456,14 @@ class SubagentRunner:
         definition: AgentDefinition,
         runtime_state: dict[str, Any],
     ):
-        agent_config = ReactAgentConfig(
-            name=row.agent_key,
-            tools=await self._build_tools(definition, runtime_state),
-            termination=TerminationCondition(mode="no_tool_call"),
-        )
         model_config = dict(self.model_config)
         session = await _open_session(self.session_factory)
         try:
             model_config = await _resolve_agent_model_config(
                 session,
                 configured_model_id=definition.model_id,
-                configured_reasoning_effort=getattr(
-                    definition, "reasoning_effort", DEFAULT_AGENT_REASONING_EFFORT
-                ),
                 inherited_config=model_config,
+                configured_reasoning_effort=definition.reasoning_effort,
             )
         finally:
             await _close_session(session)
@@ -461,7 +474,16 @@ class SubagentRunner:
             f"model={model_config.get('model_id')} "
             f"reasoning_effort={model_config.get('reasoning_effort') or 'disabled'}"
         )
-        model = create_chat_model(ModelConfig(**to_client_model_config(model_config)))
+        agent_config = ReactAgentConfig(
+            name=row.agent_key,
+            tools=await self._build_tools(definition, runtime_state),
+            termination=TerminationCondition(mode="no_tool_call"),
+        )
+        client_model_config = to_client_model_config(model_config)
+        session_id = runtime_state.get("session_id") or getattr(row, "child_thread_id", None)
+        if session_id:
+            client_model_config["session_id"] = session_id
+        model = create_chat_model(ModelConfig(**client_model_config))
         graph = create_react_agent(
             agent_config,
             model=model,

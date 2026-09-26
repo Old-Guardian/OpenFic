@@ -36,7 +36,10 @@ import type { AgentMessage } from "@/lib/agent.types";
 
 import { AskUserToolMessage } from "../ask-user/ask-user-tool-message";
 import { ChapterToolMessage } from "../chapter/chapter-tool-message";
-import { CharacterToolMessage } from "../character/character-tool-message";
+import {
+  CharacterRelationshipToolMessage,
+  CharacterToolMessage,
+} from "../character/character-tool-message";
 import { KnowledgeReadToolMessage } from "../knowledge/knowledge-read-tool-message";
 import { KnowledgeSearchToolMessage } from "../knowledge/knowledge-search-tool-message";
 import {
@@ -127,6 +130,15 @@ function getVolumeRefLabel(message: AgentMessage, key: string): string | undefin
 
 function getSkillArg(message: AgentMessage, key: string): string | undefined {
   return asString(getStreamingData(message)[key]) ?? undefined;
+}
+
+function getRelationshipDetail(message: AgentMessage): string | undefined {
+  const args = getStreamingData(message);
+  const names = [
+    asString(args.source_name) ?? asString(args.name),
+    asString(args.target_name),
+  ].filter(Boolean);
+  return names.length ? names.join(" ↔ ") : undefined;
 }
 
 const TOOL_REGISTRY = {
@@ -621,6 +633,17 @@ const TOOL_REGISTRY = {
     getTitle: () => i18n.t("assistant.tools.readCharacter"),
     getDetail: (message) => getLegacySingleReadDetail(message, "character"),
   },
+  query_character_relationships: {
+    toolName: "query_character_relationships",
+    group: "context",
+    tag: "character-relationship-query",
+    isExplore: true,
+    contentMode: "hidden",
+    icon: Network,
+    getTitle: () => i18n.t("assistant.tools.queryCharacterRelationships"),
+    getDetail: getRelationshipDetail,
+    render: (message) => <CharacterRelationshipToolMessage message={message} />,
+  },
   list_world_entries: {
     toolName: "list_world_entries",
     group: "context",
@@ -756,6 +779,38 @@ const TOOL_REGISTRY = {
     icon: UserRoundX,
     getTitle: () => i18n.t("assistant.tools.deleteCharacter"),
     getDetail: (message) => getCharacterPayload(message).name,
+  },
+  create_character_relationship: {
+    toolName: "create_character_relationship",
+    group: "context",
+    tag: "character-relationship-create",
+    isExplore: false,
+    contentMode: "hidden",
+    icon: Network,
+    getTitle: () => i18n.t("assistant.tools.createCharacterRelationship"),
+    getDetail: getRelationshipDetail,
+    render: (message) => <CharacterRelationshipToolMessage message={message} />,
+  },
+  edit_character_relationship: {
+    toolName: "edit_character_relationship",
+    group: "context",
+    tag: "character-relationship-edit",
+    isExplore: false,
+    contentMode: "hidden",
+    icon: UserRoundPen,
+    getTitle: () => i18n.t("assistant.tools.editCharacterRelationship"),
+    getDetail: getRelationshipDetail,
+    render: (message) => <CharacterRelationshipToolMessage message={message} />,
+  },
+  delete_character_relationship: {
+    toolName: "delete_character_relationship",
+    group: "context",
+    tag: "character-relationship-delete",
+    isExplore: false,
+    contentMode: "hidden",
+    icon: UserRoundX,
+    getTitle: () => i18n.t("assistant.tools.deleteCharacterRelationship"),
+    getDetail: getRelationshipDetail,
   },
   write_plan: {
     toolName: "write_plan",

@@ -6,6 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from loguru import logger
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.character import (
@@ -13,9 +14,15 @@ from app.api.schemas.character import (
     CharacterBatchDeleteResponse,
     CharacterBatchFavoriteRequest,
     CharacterBatchFavoriteResponse,
+    CharacterGraphNode,
+    CharacterGraphResponse,
     CharacterListItemResponse,
     CharacterListResponse,
     CharacterResponse,
+    CharacterPositionRequest,
+    CharacterRelationshipCreate,
+    CharacterRelationshipResponse,
+    CharacterRelationshipUpdate,
     CharacterSearchMatch,
     CharacterSearchResponse,
     CharacterSearchResult,
@@ -23,13 +30,15 @@ from app.api.schemas.character import (
 from app.core.errors import ConflictError, NotFoundError
 from app.core.storage import get_character_image_url
 from app.storage.database import get_session
-from app.storage.models.character import Character
-from app.storage.services import character_service
+from app.storage.models.character import Character, CharacterRelationship
+from app.storage.services import character_service, character_relationship_service
 
 router = APIRouter(tags=["characters"])
 
 
-def to_response(character: Character, aliases: list[str]) -> CharacterResponse:
+def to_response(
+    character: Character, aliases: list[str], relationship_count: int = 0
+) -> CharacterResponse:
     """转换角色响应。"""
     return CharacterResponse(
         id=character.id,
@@ -41,10 +50,13 @@ def to_response(character: Character, aliases: list[str]) -> CharacterResponse:
         aliases=aliases,
         created_at=character.created_at,
         updated_at=character.updated_at,
+        relationship_count=relationship_count,
     )
 
 
-def to_list_item_response(character: Character, aliases: list[str]) -> CharacterListItemResponse:
+def to_list_item_response(
+    character: Character, aliases: list[str], relationship_count: int = 0
+) -> CharacterListItemResponse:
     """转换角色列表项响应。"""
     return CharacterListItemResponse(
         id=character.id,
@@ -56,6 +68,7 @@ def to_list_item_response(character: Character, aliases: list[str]) -> Character
         aliases=aliases,
         created_at=character.created_at,
         updated_at=character.updated_at,
+        relationship_count=relationship_count,
     )
 
 
@@ -75,6 +88,22 @@ def parse_aliases_json(raw: str | None) -> list[str] | None:
     return parsed
 
 
+def to_relationship_response(relation: CharacterRelationship) -> CharacterRelationshipResponse:
+    return CharacterRelationshipResponse(
+        id=relation.id, source_character_id=relation.source_character_id,
+        target_character_id=relation.target_character_id, name=relation.name,
+        description=relation.description,
+    )
+
+
+def relationship_counts(relations: list[CharacterRelationship]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for relation in relations:
+        for character_id in (relation.source_character_id, relation.target_character_id):
+            counts[character_id] = counts.get(character_id, 0) + 1
+    return counts
+
+
 @router.get(
     "/projects/{project_id}/characters",
     response_model=CharacterListResponse,
@@ -90,9 +119,14 @@ async def list_project_characters(
         aliases_by_id = await character_service.list_aliases_by_ids(
             session, [character.id for character in characters]
         )
+        counts = relationship_counts(
+            await character_relationship_service.list_for_project(session, project_id)
+        )
         return CharacterListResponse(
             items=[
-                to_list_item_response(character, aliases_by_id.get(character.id, []))
+                to_list_item_response(
+                    character, aliases_by_id.get(character.id, []), counts.get(character.id, 0)
+                )
                 for character in characters
             ],
             total=len(characters),
@@ -227,8 +261,11 @@ async def get_character(
     """获取角色。"""
     try:
         character = await character_service.get_character(session, character_id)
+        relations = await character_relationship_service.list_for_project(session, character.project_id)
         return to_response(
-            character, await character_service.list_aliases(session, character.id)
+            character,
+            await character_service.list_aliases(session, character.id),
+            relationship_counts(relations).get(character.id, 0),
         )
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -260,8 +297,11 @@ async def update_character(
             image_file=image,
             aliases=aliases,
         )
+        relations = await character_relationship_service.list_for_project(session, character.project_id)
         return to_response(
-            character, await character_service.list_aliases(session, character.id)
+            character,
+            await character_service.list_aliases(session, character.id),
+            relationship_counts(relations).get(character.id, 0),
         )
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -285,3 +325,61 @@ async def delete_character(
         await character_service.delete_character(session, character_id)
     except NotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.get("/projects/{project_id}/character-graph", response_model=CharacterGraphResponse)
+async def get_character_graph(project_id: str, session: Annotated[AsyncSession, Depends(get_session)]) -> CharacterGraphResponse:
+    try:
+        characters = await character_service.list_characters_by_project(session, project_id)
+        relations = await character_relationship_service.list_for_project(session, project_id)
+        counts = relationship_counts(relations)
+        return CharacterGraphResponse(
+            nodes=[CharacterGraphNode(character_id=character.id, name=character.name,
+                image_url=get_character_image_url(character.image_path), x=character.graph_x,
+                y=character.graph_y, relationship_count=counts.get(character.id, 0)) for character in characters],
+            relationships=[to_relationship_response(relation) for relation in relations],
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/character-relationships", response_model=CharacterRelationshipResponse, status_code=201)
+async def create_character_relationship(project_id: str, data: CharacterRelationshipCreate, session: Annotated[AsyncSession, Depends(get_session)]) -> CharacterRelationshipResponse:
+    try:
+        relation = await character_relationship_service.create_relationship(session, project_id, data.source_character_id, data.target_character_id, data.name, data.description)
+        return to_relationship_response(relation)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="这两个角色已有关系") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/character-relationships/{relationship_id}", response_model=CharacterRelationshipResponse)
+async def update_character_relationship(relationship_id: str, data: CharacterRelationshipUpdate, session: Annotated[AsyncSession, Depends(get_session)]) -> CharacterRelationshipResponse:
+    try:
+        return to_relationship_response(await character_relationship_service.update_relationship(session, relationship_id, data.name, data.description))
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/character-relationships/{relationship_id}", status_code=204)
+async def delete_character_relationship(relationship_id: str, session: Annotated[AsyncSession, Depends(get_session)]) -> None:
+    try:
+        await character_relationship_service.delete_relationship(session, relationship_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.patch("/projects/{project_id}/characters/{character_id}/position", status_code=200)
+async def update_character_position(project_id: str, character_id: str, data: CharacterPositionRequest, session: Annotated[AsyncSession, Depends(get_session)]) -> CharacterPositionRequest:
+    try:
+        await character_relationship_service.set_position(session, project_id, character_id, data.x, data.y)
+        return data
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

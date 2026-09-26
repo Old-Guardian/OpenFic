@@ -319,7 +319,7 @@ class TestAgentAPI:
 
         assert config["reasoning_effort"] == "high"
 
-    async def test_build_model_config_omits_disabled_reasoning_effort(self) -> None:
+    async def test_build_model_config_preserves_auto_reasoning_effort(self) -> None:
         model = SimpleNamespace(
             id="reasoning-model-record",
             model_id="reasoning-model",
@@ -339,9 +339,9 @@ class TestAgentAPI:
             url="https://custom.api/v1",
         )
 
-        config = await _build_model_config(model, provider, "sk-test", "off")
+        config = await _build_model_config(model, provider, "sk-test", "auto")
 
-        assert "reasoning_effort" not in config
+        assert config["reasoning_effort"] == "auto"
 
     async def test_list_agent_tools_success(self, client: AsyncClient) -> None:
         response = await client.get("/api/v1/agent/tools")
@@ -535,6 +535,22 @@ class TestAgentAPI:
             {
                 "key": "web_fetch",
                 "is_readonly": True,
+            },
+            {
+                "key": "query_character_relationships",
+                "is_readonly": True,
+            },
+            {
+                "key": "create_character_relationship",
+                "is_readonly": False,
+            },
+            {
+                "key": "edit_character_relationship",
+                "is_readonly": False,
+            },
+            {
+                "key": "delete_character_relationship",
+                "is_readonly": False,
             },
         ]
 
@@ -4375,7 +4391,7 @@ class TestAgentAPI:
         runner = _SESSION_RUNNERS[session_id]
         assert runner.model_config.get("model_id") == "gpt-3.5-turbo"
 
-    async def test_create_agent_session_inherit_does_not_backfill_default(
+    async def test_create_agent_session_inherit_uses_global_default_effort(
         self,
         client: AsyncClient,
     ) -> None:
@@ -4395,7 +4411,7 @@ class TestAgentAPI:
         assert session_response.status_code == status.HTTP_200_OK
         session_id = session_response.json()["session_id"]
         runner = _SESSION_RUNNERS[session_id]
-        assert "reasoning_effort" not in runner.model_config or runner.model_config["reasoning_effort"] is None
+        assert runner.model_config["reasoning_effort"] == "medium"
 
     async def test_create_agent_session_session_effort_overrides_agent_default(
         self,

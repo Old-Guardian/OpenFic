@@ -133,4 +133,3 @@ export function getAgentReasoningEffortOptions(): Array<{
 export function getAgentReasoningEffortLabel(effort: AgentReasoningEffort): string {
   return i18n.t(AGENT_REASONING_EFFORT_LABEL_KEYS[effort] ?? effort, { defaultValue: effort });
 }
-

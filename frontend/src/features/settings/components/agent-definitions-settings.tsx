@@ -30,7 +30,11 @@ import { useState, useCallback, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
-import { LabeledSelect, ModelIdSelect, type ModelIdSelectOption } from "@/components";
+import {
+  LabeledSelect,
+  ModelIdSelect,
+  type ModelIdSelectOption,
+} from "@/components";
 import { ContextMenu, type ContextMenuItem, toast, ConfirmDialog, Spinner } from "@/components";
 import { AgentBrandIcon } from "@/components/agent-brand-icon";
 import {
@@ -72,6 +76,8 @@ import { fetchSettings } from "../lib/settings-api";
 import type { Settings } from "../lib/settings.types";
 import { AgentBrandingPicker } from "./agent-branding-picker";
 import { AgentSettingsLockNotice } from "./agent-settings-lock-notice";
+
+import "./agent-definitions-settings.css";
 
 const LIST_WIDTH = 280;
 const SUBAGENT_RESTRICTED_TOOL_CATEGORIES = new Set(["orchestration", "interaction"]);
@@ -361,7 +367,7 @@ function AgentForm({
       direction="column"
       gap="5"
       key={def.key}
-      className="agent-definition-form"
+      className="agent-definition-form agent-definitions-settings__form"
     >
       <Flex
         direction="column"
