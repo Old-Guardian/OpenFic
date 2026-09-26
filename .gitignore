@@ -16,6 +16,7 @@
 .serena/
 .orchestra-skills.json
 .env
+.scicodenotes/
 skill-lock.json
 tmp
 data
