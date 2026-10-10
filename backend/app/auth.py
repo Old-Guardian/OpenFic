@@ -39,7 +39,9 @@ class AuthService:
 
         serializer = URLSafeTimedSerializer(self.password or "", salt=_AUTH_COOKIE_SALT)
         try:
-            return serializer.loads(value, max_age=AUTH_COOKIE_MAX_AGE) == "authenticated"
+            return (
+                serializer.loads(value, max_age=AUTH_COOKIE_MAX_AGE) == "authenticated"
+            )
         except BadSignature:
             return False
 
@@ -58,7 +60,9 @@ class AuthMiddleware:
         "/openapi.json",
     )
 
-    def __init__(self, app: ASGIApp, auth_service: AuthService, api_prefix: str) -> None:
+    def __init__(
+        self, app: ASGIApp, auth_service: AuthService, api_prefix: str
+    ) -> None:
         self.app = app
         self.auth_service = auth_service
         self.api_prefix = api_prefix.rstrip("/")
@@ -77,10 +81,16 @@ class AuthMiddleware:
             return
 
         path = scope.get("path", "")
-        if path.startswith(f"{self.api_prefix}/auth/") or path in {
-            f"{self.api_prefix}/health",
-            f"{self.api_prefix}/health/shutdown",
-        } or not path.startswith(self._protected_prefixes):
+        if (
+            path.startswith(f"{self.api_prefix}/auth/")
+            or path
+            in {
+                f"{self.api_prefix}/health",
+                f"{self.api_prefix}/health/shutdown",
+                f"{self.api_prefix}/openai-codex/auth/callback",
+            }
+            or not path.startswith(self._protected_prefixes)
+        ):
             await self.app(scope, receive, send)
             return
 

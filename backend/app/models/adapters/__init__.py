@@ -14,6 +14,7 @@ from app.models.adapters.google_genai import GoogleGenAIAdapter
 from app.models.adapters.google_vertex import GoogleVertexAdapter
 from app.models.adapters.mistral import MistralAdapter
 from app.models.adapters.openai import OpenAIAdapter
+from app.models.adapters.openai_codex import OpenAICodexAdapter
 from app.models.adapters.openai_compat_family import (
     AmazonNovaAdapter,
     CohereAdapter,
@@ -22,7 +23,9 @@ from app.models.adapters.openai_compat_family import (
     NvidiaAIEndpointsAdapter,
 )
 from app.models.adapters.openai_compatible import OpenAICompatibleAdapter
-from app.models.adapters.openai_responses_compatible import OpenAIResponsesCompatibleAdapter
+from app.models.adapters.openai_responses_compatible import (
+    OpenAIResponsesCompatibleAdapter,
+)
 from app.models.adapters.openrouter import OpenRouterAdapter
 
 __all__ = [
@@ -40,8 +43,8 @@ __all__ = [
     "MistralAdapter",
     "NvidiaAIEndpointsAdapter",
     "OpenAIAdapter",
+    "OpenAICodexAdapter",
     "OpenAICompatibleAdapter",
     "OpenAIResponsesCompatibleAdapter",
     "OpenRouterAdapter",
 ]
-

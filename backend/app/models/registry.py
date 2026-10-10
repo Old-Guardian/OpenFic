@@ -19,6 +19,7 @@ from app.models.adapters.google_genai import GoogleGenAIAdapter
 from app.models.adapters.google_vertex import GoogleVertexAdapter
 from app.models.adapters.mistral import MistralAdapter
 from app.models.adapters.openai import OpenAIAdapter
+from app.models.adapters.openai_codex import OpenAICodexAdapter
 from app.models.adapters.openai_compat_family import (
     AmazonNovaAdapter,
     CohereAdapter,
@@ -39,6 +40,7 @@ class AdapterRegistry:
     # Adapter映射关系：provider_type -> Adapter类
     _registry: dict[str, Type[BaseAdapter]] = {
         "openai": OpenAIAdapter,
+        "openai-codex": OpenAICodexAdapter,
         "anthropic": AnthropicAdapter,
         "anthropic-compatible": AnthropicCompatibleAdapter,
         "gemini-compatible": GeminiCompatibleAdapter,
@@ -54,6 +56,7 @@ class AdapterRegistry:
         "openrouter": OpenRouterAdapter,
         "amazon-nova": AmazonNovaAdapter,
         "openai-compatible": OpenAICompatibleAdapter,
+        "infistar": OpenAICompatibleAdapter,
         "openai-compatible-responses": OpenAIResponsesCompatibleAdapter,
         **{
             provider_type: AnthropicCompatibleAdapter
@@ -84,7 +87,9 @@ class AdapterRegistry:
             # 尝试使用openai-compatible作为默认
             adapter_class = cls._registry.get("openai-compatible")
             if not adapter_class:
-                raise ValueError(f"No adapter found for provider_type='{provider_type}'")
+                raise ValueError(
+                    f"No adapter found for provider_type='{provider_type}'"
+                )
 
         if kwargs:
             return adapter_class(**kwargs)
@@ -103,7 +108,7 @@ class AdapterRegistry:
             是否支持。
         """
         adapter = cls.get_adapter(provider_type)
-        
+
         if task_type == "llm":
             return adapter.supports_llm()
         elif task_type == "embedding":

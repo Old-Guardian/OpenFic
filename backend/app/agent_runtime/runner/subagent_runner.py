@@ -39,7 +39,10 @@ from app.agent_runtime.persistence.child_runs import (
 )
 from app.agent_runtime.persistence.loader import load_history
 from app.agent_runtime.persistence.model import AgentChildRun, AgentChildRunRequest
-from app.agent_runtime.runner.checkpointer import get_checkpointer, prune_thread_checkpoints
+from app.agent_runtime.runner.checkpointer import (
+    get_checkpointer,
+    prune_thread_checkpoints,
+)
 from app.agent_runtime.runner.event_translator import EventTranslator
 from app.agent_runtime.runner.event_scope import SUBAGENT_CHILD_EVENT_TAG
 from app.agent_runtime.runner.run_registry import get_agent_run_registry
@@ -67,6 +70,7 @@ from app.core.encryption import EncryptionService
 from app.models.clients.model_factory import ModelConfig, create_chat_model
 from app.models.repos import model_provider_repo, model_repo
 from app.models.services.model_provider_service import ModelProviderService
+from app.models.services.openai_codex_service import OPENAI_CODEX_PROVIDER_TYPE
 from app.models.vertex_config import VERTEX_PROVIDER_TYPE
 from app.socket import emit
 from app.socket.handlers import (
@@ -87,7 +91,9 @@ _SUBAGENT_RESTRICTED_TOOL_NAMES = frozenset(
 )
 
 
-def build_child_messages(history: list[BaseMessage], *, content: str) -> list[BaseMessage]:
+def build_child_messages(
+    history: list[BaseMessage], *, content: str
+) -> list[BaseMessage]:
     return [*history, HumanMessage(content=content)]
 
 
@@ -161,10 +167,9 @@ async def _resolve_model_record_id(
     parent model config).
     """
     if configured_model_id == SYSTEM_LIGHT_MODEL_REFERENCE:
-        return (
-            await _read_setting_model_id(session, "light_model")
-            or await _read_setting_model_id(session, "default_model")
-        )
+        return await _read_setting_model_id(
+            session, "light_model"
+        ) or await _read_setting_model_id(session, "default_model")
 
     if configured_model_id in (None, "", SYSTEM_DEFAULT_MODEL_REFERENCE):
         return await _read_setting_model_id(session, "default_model")
@@ -172,7 +177,9 @@ async def _resolve_model_record_id(
     return configured_model_id
 
 
-async def _build_model_config_from_record(session: Any, record_id: str) -> dict[str, Any] | None:
+async def _build_model_config_from_record(
+    session: Any, record_id: str
+) -> dict[str, Any] | None:
     """Resolve a model record nanoid to a full model config dict.
 
     Mirrors the parent agent and background-job resolution: load the model +
@@ -219,13 +226,22 @@ async def _build_model_config_from_record(session: Any, record_id: str) -> dict[
             "vertex_connection": vertex_connection,
         }
 
-    api_key = encryption_service.decrypt(provider.api_key_encrypted)
+    api_key = (
+        ""
+        if provider.provider_type == OPENAI_CODEX_PROVIDER_TYPE
+        else encryption_service.decrypt(provider.api_key_encrypted)
+    )
     custom_headers = provider_service.get_decrypted_custom_headers(provider)
     return {
         "provider_type": provider.provider_type,
         "base_url": provider.url,
         "api_key": api_key,
         "model_id": model.model_id,
+        **(
+            {"provider_id": provider.id}
+            if provider.provider_type == OPENAI_CODEX_PROVIDER_TYPE
+            else {}
+        ),
         **({"custom_headers": custom_headers} if custom_headers else {}),
         "max_context_tokens": model.context_length,
         "input_price": getattr(model, "input_price", 0.0),
@@ -391,7 +407,9 @@ class SubagentRunner:
             raise ValueError(f"agent is not an enabled subagent: {definition.key}")
         names = [
             name
-            for name in get_tool_names_for_categories(definition.enabled_tool_categories)
+            for name in get_tool_names_for_categories(
+                definition.enabled_tool_categories
+            )
             if name not in _SUBAGENT_RESTRICTED_TOOL_NAMES
         ]
         session = await _open_session(self.session_factory)
@@ -480,7 +498,9 @@ class SubagentRunner:
             termination=TerminationCondition(mode="no_tool_call"),
         )
         client_model_config = to_client_model_config(model_config)
-        session_id = runtime_state.get("session_id") or getattr(row, "child_thread_id", None)
+        session_id = runtime_state.get("session_id") or getattr(
+            row, "child_thread_id", None
+        )
         if session_id:
             client_model_config["session_id"] = session_id
         model = create_chat_model(ModelConfig(**client_model_config))
@@ -570,7 +590,11 @@ class SubagentRunner:
                             payload,
                         )
                 await persister.handle(event)
-                if event.get("event") in {"on_chat_model_end", "on_tool_end", "on_tool_error"}:
+                if event.get("event") in {
+                    "on_chat_model_end",
+                    "on_tool_end",
+                    "on_tool_error",
+                }:
                     await self._clear_child_replay_run(
                         row.child_thread_id,
                         event.get("run_id"),
@@ -580,7 +604,9 @@ class SubagentRunner:
                     if isinstance(output, dict):
                         final_state = output
             await persister.finalize(reason="done")
-            snapshot_state = await self._load_child_graph_state(graph, row.child_thread_id)
+            snapshot_state = await self._load_child_graph_state(
+                graph, row.child_thread_id
+            )
             if snapshot_state is not None:
                 final_state = snapshot_state
             if final_state is None:
@@ -643,7 +669,9 @@ class SubagentRunner:
             return None
 
         state = await aget_state({"configurable": {"thread_id": child_thread_id}})
-        values = state.values if isinstance(getattr(state, "values", None), dict) else {}
+        values = (
+            state.values if isinstance(getattr(state, "values", None), dict) else {}
+        )
         if not isinstance(values, dict) or not values:
             return None
 
@@ -740,7 +768,14 @@ class SubagentRunner:
         *,
         model_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        active_model_config = model_config if model_config is not None else self.model_config
+        active_model_config = (
+            model_config if model_config is not None else self.model_config
+        )
+        billing_config = (
+            event_data["billing_config"]
+            if event_data.get("usage_kind") == "compaction"
+            else active_model_config
+        )
         usage = event_data.get("usage") if isinstance(event_data, dict) else None
         usage_dict = usage if isinstance(usage, dict) else {}
         token_input = int(
@@ -762,14 +797,15 @@ class SubagentRunner:
         if token_cache_write == 0:
             token_cache_write = max(int(usage_dict.get("token_cache_write") or 0), 0)
         call_cost = calculate_llm_call_cost(
+            provider_type=str(billing_config.get("provider_type") or ""),
             token_input=token_input,
             token_output=token_output,
             token_cache=token_cache,
             token_cache_write=token_cache_write,
-            input_price=float(active_model_config.get("input_price") or 0),
-            output_price=float(active_model_config.get("output_price") or 0),
-            cache_read_price=float(active_model_config.get("cache_read_price") or 0),
-            cache_write_price=float(active_model_config.get("cache_write_price") or 0),
+            input_price=float(billing_config.get("input_price") or 0),
+            output_price=float(billing_config.get("output_price") or 0),
+            cache_read_price=float(billing_config.get("cache_read_price") or 0),
+            cache_write_price=float(billing_config.get("cache_write_price") or 0),
         )
         return {
             "session_id": session_id,
@@ -845,7 +881,9 @@ class SubagentRunner:
                 room=agent_session_room(row.parent_session_id),
             )
 
-    async def _build_subagent_status_payload(self, row: AgentChildRun) -> dict[str, Any]:
+    async def _build_subagent_status_payload(
+        self, row: AgentChildRun
+    ) -> dict[str, Any]:
         pending_count = await self._count_pending_requests(row.id)
         payload = {
             "parent_session_id": row.parent_session_id,
@@ -1145,14 +1183,18 @@ class SubagentRunner:
             "request_id": request_row.id,
         }
 
-    async def _claim_next_request(self, child_run_id: str) -> AgentChildRunRequest | None:
+    async def _claim_next_request(
+        self, child_run_id: str
+    ) -> AgentChildRunRequest | None:
         session = await _open_session(self.session_factory)
         try:
             return await claim_next_child_run_request(session, child_run_id)
         finally:
             await _close_session(session)
 
-    async def _load_running_request(self, child_run_id: str) -> AgentChildRunRequest | None:
+    async def _load_running_request(
+        self, child_run_id: str
+    ) -> AgentChildRunRequest | None:
         session = await _open_session(self.session_factory)
         try:
             return await get_running_child_run_request(

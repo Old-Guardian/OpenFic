@@ -19,11 +19,11 @@ def register_sqlmodel_models() -> None:
     )
     from app.models.entities.model import Model
     from app.models.entities.model_provider import ModelProvider
+    from app.models.entities.model_provider_oauth_registration import ModelProviderOAuthRegistration
     from app.storage.models.llm_audit_log import LLMAuditLog
     from app.storage.models.agent_memory import AgentMemory
     from app.storage.models.agent_rule import AgentRule
     from app.storage.models.character import Character
-    from app.storage.models.character_alias import CharacterAlias
     from app.storage.models.chapter import Chapter
     from app.storage.models.chapter_summary import ChapterSummary
     from app.storage.models.commit import Commit
@@ -48,7 +48,6 @@ def register_sqlmodel_models() -> None:
     from app.storage.models.note import Note, NoteCategory
     from app.storage.models.world_info import WorldInfo
     from app.storage.models.world_info_entry import WorldInfoEntry
-    from app.storage.models.world_info_entry_alias import WorldInfoEntryAlias
     from app.storage.models.writing_activity_event import WritingActivityEvent
 
     _ = (
@@ -61,12 +60,12 @@ def register_sqlmodel_models() -> None:
         BackgroundJobEvent,
         BackgroundJobItem,
         Character,
-        CharacterAlias,
         Chapter,
         ChapterSummary,
         Commit,
         Model,
         ModelProvider,
+        ModelProviderOAuthRegistration,
         Note,
         NoteCategory,
         Project,
@@ -87,6 +86,5 @@ def register_sqlmodel_models() -> None:
         Volume,
         WorldInfo,
         WorldInfoEntry,
-        WorldInfoEntryAlias,
         WritingActivityEvent,
     )

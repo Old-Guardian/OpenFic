@@ -6,12 +6,15 @@
 
 import type { ModelProvider, ModelProviderCatalogProvider, ProviderType } from "@/lib/model.types";
 
+export const OPENAI_ICON_PATH = "/icons/model/catalog/openai.svg";
+
 const EMBEDDING_DIMENSIONS_SUPPORTED_PROVIDER_TYPES = new Set<ProviderType>([
   "openai",
   "openrouter",
   "openai-compatible",
   "ollama",
   "nvidia-ai-endpoints",
+  "infistar",
 ]);
 
 const CUSTOM_PROVIDER_TYPES = new Set([
@@ -45,6 +48,7 @@ export function isCustomProviderType(providerType: string): boolean {
 export function getProviderDisplayName(providerType: string): string {
   const nameMap: Record<string, string> = {
     openai: "OpenAI",
+    "openai-codex": "OpenAI Codex",
     anthropic: "Anthropic",
     "google-genai": "Google Generative AI",
     ollama: "Ollama",
@@ -56,6 +60,7 @@ export function getProviderDisplayName(providerType: string): string {
     openrouter: "OpenRouter",
     "amazon-nova": "Amazon Nova",
     deepseek: "DeepSeek",
+    infistar: "Infistar",
     "openai-compatible": "OpenAI Compatible",
     "openai-compatible-responses": "OpenAI Compatible (Responses)",
     "anthropic-compatible": "Anthropic Compatible",
@@ -76,6 +81,9 @@ export function getProviderUrl(
   if (isCustomProviderType(providerType)) {
     return null;
   }
+  if (providerType === "openai-codex") {
+    return "https://api.openai.com/v1";
+  }
 
   const catalogProvider = catalogProviders?.find(
     (provider) => provider.providerType === providerType,
@@ -84,6 +92,9 @@ export function getProviderUrl(
 }
 
 export function resolveProviderCatalogType(provider: ModelProvider): string | null {
+  if (provider.providerType === "openai-codex") {
+    return "openai";
+  }
   if (isCustomProviderType(provider.providerType)) {
     return provider.catalogMatch?.catalogProviderType ?? null;
   }

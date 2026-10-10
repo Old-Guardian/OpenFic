@@ -18,6 +18,7 @@ from app.models.entities.model import Model
 from app.models.entities.model_provider import ModelProvider
 from app.models.repos import model_provider_repo, model_repo
 from app.models.services.model_provider_service import ModelProviderService
+from app.models.services.openai_codex_service import OPENAI_CODEX_PROVIDER_TYPE
 from app.models.vertex_config import VERTEX_PROVIDER_TYPE
 from app.settings import settings
 from app.storage.repos import setting_repo
@@ -69,7 +70,9 @@ async def resolve_background_llm(
             effective_model_id = await resolve_summary_model_id(session)
         elif model_policy in {"default_model", "light_model"}:
             setting = await setting_repo.get_by_key(session, model_policy)
-            effective_model_id = setting.value.strip() if setting and setting.value else ""
+            effective_model_id = (
+                setting.value.strip() if setting and setting.value else ""
+            )
 
     if not effective_model_id:
         logger.warning(f"后台任务模型未配置，model_policy={model_policy}")
@@ -95,7 +98,7 @@ async def resolve_background_llm(
         vertex_connection = await provider_service.resolve_vertex_connection_context(
             provider
         )
-    else:
+    elif provider.provider_type != OPENAI_CODEX_PROVIDER_TYPE:
         api_key = encryption_service.decrypt(provider.api_key_encrypted)
 
     custom_headers = provider_service.get_decrypted_custom_headers(provider)
@@ -107,6 +110,11 @@ async def resolve_background_llm(
                 base_url=provider.url,
                 api_key=api_key,
                 model_id=model.model_id,
+                provider_id=(
+                    provider.id
+                    if provider.provider_type == OPENAI_CODEX_PROVIDER_TYPE
+                    else None
+                ),
                 custom_headers=custom_headers or None,
                 temperature=model.temperature,
                 top_p=model.top_p,

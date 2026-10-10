@@ -45,7 +45,10 @@ from app.agent_runtime.persistence.task_projection import (
     load_task_messages_for_agent_session,
 )
 from app.agent_runtime.persistence.model import AgentChildRun
-from app.agent_runtime.revisions import finalize_revision_status, rollback_revision_for_session
+from app.agent_runtime.revisions import (
+    finalize_revision_status,
+    rollback_revision_for_session,
+)
 from app.agent_runtime.fork import fork_agent_session_at_revision
 from app.agent_runtime.model_config import without_api_key
 from app.agent_runtime.runner.checkpointer import (
@@ -91,6 +94,7 @@ from app.models.clients.google_vertex_auth import VertexAuthError
 from app.models.clients.model_params import normalize_reasoning_effort
 from app.models.repos import model_provider_repo, model_repo
 from app.models.services.model_provider_service import ModelProviderService
+from app.models.services.openai_codex_service import OPENAI_CODEX_PROVIDER_TYPE
 from app.models.vertex_config import VERTEX_PROVIDER_TYPE, VertexConfigError
 from app.settings import settings
 from app.background.jobs.session_title_jobs import enqueue_session_title_job
@@ -164,6 +168,7 @@ TOOL_DISPLAY_ORDER = {
     "delete_character_relationship": 50,
 }
 
+
 def _build_default_agent_session_title(created_at: datetime) -> str:
     timestamp = created_at.astimezone(UTC).isoformat(timespec="milliseconds")
     return f"{DEFAULT_AGENT_SESSION_TITLE_PREFIX}{timestamp.replace('+00:00', 'Z')}"
@@ -173,6 +178,7 @@ def _is_pending_agent_session_title(title: str) -> bool:
     return title == LEGACY_DEFAULT_AGENT_SESSION_TITLE or bool(
         DEFAULT_AGENT_SESSION_TITLE_PATTERN.fullmatch(title)
     )
+
 
 _SESSION_RUNNERS: dict[str, SessionRunner] = {}
 
@@ -388,13 +394,18 @@ async def _checkpoint_has_pending_interrupt(session_id: str, revision_id: str) -
     checkpoint = await checkpointer.aget_tuple(
         {"configurable": {"thread_id": session_id}}
     )
-    checkpoint_data = getattr(checkpoint, "checkpoint", None) if checkpoint is not None else None
+    checkpoint_data = (
+        getattr(checkpoint, "checkpoint", None) if checkpoint is not None else None
+    )
     channel_values = (
         checkpoint_data.get("channel_values")
         if isinstance(checkpoint_data, dict)
         else None
     )
-    if not isinstance(channel_values, dict) or channel_values.get("current_revision_id") != revision_id:
+    if (
+        not isinstance(channel_values, dict)
+        or channel_values.get("current_revision_id") != revision_id
+    ):
         return False
     return (
         any(
@@ -589,8 +600,8 @@ async def _resolve_model_config(
         # Vertex：在调用边界解析连接上下文（解密 + ADC/Service Account 解析），
         # 不读取 API Key 字段。
         try:
-            vertex_connection = await provider_service.resolve_vertex_connection_context(
-                provider
+            vertex_connection = (
+                await provider_service.resolve_vertex_connection_context(provider)
             )
         except (VertexConfigError, VertexAuthError) as exc:
             raise ValueError(str(exc)) from exc
@@ -603,19 +614,25 @@ async def _resolve_model_config(
             vertex_connection=vertex_connection,
         )
 
-    try:
-        api_key = encryption_service.decrypt(provider.api_key_encrypted)
-    except Exception as exc:
-        raise ValueError("API密钥解密失败") from exc
+    if provider.provider_type == OPENAI_CODEX_PROVIDER_TYPE:
+        api_key = ""
+    else:
+        try:
+            api_key = encryption_service.decrypt(provider.api_key_encrypted)
+        except Exception as exc:
+            raise ValueError("API密钥解密失败") from exc
 
     custom_headers = provider_service.get_decrypted_custom_headers(provider)
-    return await _build_model_config(
+    model_config = await _build_model_config(
         model,
         provider,
         api_key,
         reasoning_effort,
         custom_headers,
     )
+    if provider.provider_type == OPENAI_CODEX_PROVIDER_TYPE:
+        model_config["provider_id"] = provider.id
+    return model_config
 
 
 async def _resolve_legacy_model_config(
@@ -727,7 +744,9 @@ async def _launch_task(
         except asyncio.CancelledError:
             logger.bind(session_id=session_id).info("Agent task cancelled")
         except Exception:
-            logger.bind(session_id=session_id).opt(exception=True).error("Agent task failed")
+            logger.bind(session_id=session_id).opt(exception=True).error(
+                "Agent task failed"
+            )
         finally:
             if not started:
                 close = getattr(coro, "close", None)
@@ -886,7 +905,9 @@ async def list_agent_tools() -> list[AgentToolMetadataResponse]:
             is_readonly=tool.access_level == "readonly",
         )
 
-    return sorted(items_by_key.values(), key=lambda item: TOOL_DISPLAY_ORDER.get(item.key, 999))
+    return sorted(
+        items_by_key.values(), key=lambda item: TOOL_DISPLAY_ORDER.get(item.key, 999)
+    )
 
 
 @router.post("/sessions", response_model=AgentSessionCreateResponse)
@@ -907,12 +928,16 @@ async def create_agent_session(
                 detail=f"智能体 '{request.agent_key}' 不是主智能体 (kind != primary)",
             )
         configured_model_id = request.model_id or definition.model_id
-        resolved_model_id = await _resolve_agent_model_record_id(session, configured_model_id)
+        resolved_model_id = await _resolve_agent_model_record_id(
+            session, configured_model_id
+        )
         if not resolved_model_id:
             raise NotFoundError(f"智能体 '{request.agent_key}' 的模型未配置或无法解析")
 
         if request.reasoning_effort is not None:
-            effective_effort = None if request.reasoning_effort == "off" else request.reasoning_effort
+            effective_effort = (
+                None if request.reasoning_effort == "off" else request.reasoning_effort
+            )
         elif definition.reasoning_effort in AGENT_REASONING_EFFORT_TIERS:
             effective_effort = definition.reasoning_effort
         else:
@@ -963,7 +988,9 @@ async def create_agent_session(
     except NotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        )
     except Exception as exc:
         logger.opt(exception=True).error("创建 Agent 会话失败")
         raise HTTPException(
@@ -987,7 +1014,9 @@ async def upload_agent_attachment(
     """上传一份仅供指定 Agent 会话使用的附件并提取文本内容。"""
     uploaded_file = file or image
     if uploaded_file is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="附件不能为空")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="附件不能为空"
+        )
     task = await task_service.get_task_by_agent_session_id(session, session_id)
     file_name = uploaded_file.filename or "attachment"
     file_kind = classify_agent_attachment(file_name, uploaded_file.content_type)
@@ -1028,7 +1057,9 @@ async def upload_agent_attachment(
             {**event_base, "status": "error", "error": str(exc)},
             room=agent_session_room(session_id),
         )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     except Exception:
         error_message = "附件上传或解析失败"
         logger.opt(exception=True).error(
@@ -1105,19 +1136,25 @@ async def send_agent_message(
     session: AsyncSession = Depends(get_session),
 ) -> AgentSendMessageResponse:
     if not body.message.strip() and not body.attachments and not body.attachment_errors:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="消息或附件不能为空")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="消息或附件不能为空"
+        )
     if body.agent_key is not None:
         await _validate_primary_agent(session, body.agent_key)
     requested_model_config: dict | None = None
     if body.model_id and session_id not in _SESSION_RUNNERS:
         try:
-            requested_model_id = await _resolve_agent_model_record_id(session, body.model_id)
+            requested_model_id = await _resolve_agent_model_record_id(
+                session, body.model_id
+            )
             if requested_model_id:
                 requested_model_config = await _resolve_model_config(
                     session, requested_model_id, body.reasoning_effort
                 )
         except NotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+            ) from exc
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1132,8 +1169,12 @@ async def send_agent_message(
             attachment_ids=body.attachments,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    attachment_metadata = [serialize_agent_attachment(attachment) for attachment in attachments]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    attachment_metadata = [
+        serialize_agent_attachment(attachment) for attachment in attachments
+    ]
     attachment_metadata.extend(
         _serialize_attachment_error(session_id, attachment_error)
         for attachment_error in body.attachment_errors
@@ -1145,9 +1186,15 @@ async def send_agent_message(
         await enqueue_session_title_job(session, task, body.message)
         await background_service.commit_and_notify(session)
     async with _agent_session_lifecycle_lock(registry, session_id):
-        if await registry.is_running(session_id) and not await registry.is_cancelled(session_id):
-            queue_kwargs = {"attachments": attachment_metadata} if attachment_metadata else {}
-            pending_message = await runner.queue_pending_user_message(body.message, **queue_kwargs)
+        if await registry.is_running(session_id) and not await registry.is_cancelled(
+            session_id
+        ):
+            queue_kwargs = (
+                {"attachments": attachment_metadata} if attachment_metadata else {}
+            )
+            pending_message = await runner.queue_pending_user_message(
+                body.message, **queue_kwargs
+            )
             return AgentSendMessageResponse(
                 success=True,
                 session_id=session_id,
@@ -1158,11 +1205,15 @@ async def send_agent_message(
             )
 
     runner_agent_key = getattr(runner, "agent_key", None)
-    agent_key_changed = body.agent_key is not None and body.agent_key != runner_agent_key
+    agent_key_changed = (
+        body.agent_key is not None and body.agent_key != runner_agent_key
+    )
     if body.agent_key is not None:
         runner.agent_key = body.agent_key
 
-    current_def = await load_agent_definition(session, getattr(runner, "agent_key", "build") or "build")
+    current_def = await load_agent_definition(
+        session, getattr(runner, "agent_key", "build") or "build"
+    )
     model_fields = body.model_fields_set
     model_id_specified = "model_id" in model_fields
     reasoning_effort_specified = "reasoning_effort" in model_fields
@@ -1172,9 +1223,13 @@ async def send_agent_message(
     # Determine target model
     if model_id_specified:
         if body.model_id:
-            resolved_model_id = await _resolve_agent_model_record_id(session, body.model_id)
+            resolved_model_id = await _resolve_agent_model_record_id(
+                session, body.model_id
+            )
         else:
-            resolved_model_id = await _resolve_agent_model_record_id(session, current_def.model_id)
+            resolved_model_id = await _resolve_agent_model_record_id(
+                session, current_def.model_id
+            )
         if not resolved_model_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1192,7 +1247,9 @@ async def send_agent_message(
     # Determine target reasoning effort
     if reasoning_effort_specified:
         if body.reasoning_effort is not None:
-            effective_effort = None if body.reasoning_effort == "off" else body.reasoning_effort
+            effective_effort = (
+                None if body.reasoning_effort == "off" else body.reasoning_effort
+            )
         else:
             if current_def.reasoning_effort in AGENT_REASONING_EFFORT_TIERS:
                 effective_effort = current_def.reasoning_effort
@@ -1209,7 +1266,9 @@ async def send_agent_message(
             effective_effort = None
 
     model_updated = False
-    if (model_id_specified or reasoning_effort_specified or agent_key_changed) and resolved_model_id:
+    if (
+        model_id_specified or reasoning_effort_specified or agent_key_changed
+    ) and resolved_model_id:
         try:
             new_model_config = await _resolve_model_config(
                 session, resolved_model_id, effective_effort
@@ -1218,7 +1277,9 @@ async def send_agent_message(
                 runner.update_model_config(new_model_config)
             model_updated = True
         except NotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+            ) from exc
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1434,7 +1495,9 @@ async def submit_agent_question_answer(
         payload["skipped"] = True
     registry = get_agent_run_registry()
     async with _agent_session_lifecycle_lock(registry, session_id):
-        revision_id, claimed_revision = await _claim_agent_session_resume(session, session_id)
+        revision_id, claimed_revision = await _claim_agent_session_resume(
+            session, session_id
+        )
         try:
             await _launch_task(
                 db_session_factory=status_session_factory,
@@ -1461,10 +1524,14 @@ async def submit_agent_interrupt_resume(
     await _ensure_agent_session_resumable(session, session_id)
     runner = await _get_runner(session_id, session)
     status_session_factory = _make_status_session_factory(session)
-    responses = [item.model_dump(mode="json", exclude_none=True) for item in body.responses]
+    responses = [
+        item.model_dump(mode="json", exclude_none=True) for item in body.responses
+    ]
     registry = get_agent_run_registry()
     async with _agent_session_lifecycle_lock(registry, session_id):
-        revision_id, claimed_revision = await _claim_agent_session_resume(session, session_id)
+        revision_id, claimed_revision = await _claim_agent_session_resume(
+            session, session_id
+        )
         try:
             await _launch_task(
                 db_session_factory=status_session_factory,
@@ -1559,7 +1626,9 @@ async def submit_agent_tool_approval(
         return {"success": True, "session_id": session_id, "message": "已提交工具审批"}
 
     async with _agent_session_lifecycle_lock(registry, session_id):
-        revision_id, claimed_revision = await _claim_agent_session_resume(session, session_id)
+        revision_id, claimed_revision = await _claim_agent_session_resume(
+            session, session_id
+        )
         try:
             await _launch_task(
                 db_session_factory=status_session_factory,
@@ -1586,8 +1655,12 @@ async def get_agent_session_state(
     checkpoint = await checkpointer.aget_tuple(
         {"configurable": {"thread_id": session_id}}
     )
-    checkpoint_values = checkpoint.checkpoint.get("channel_values") if checkpoint else None
-    state_values = dict(checkpoint_values) if isinstance(checkpoint_values, dict) else {}
+    checkpoint_values = (
+        checkpoint.checkpoint.get("channel_values") if checkpoint else None
+    )
+    state_values = (
+        dict(checkpoint_values) if isinstance(checkpoint_values, dict) else {}
+    )
     is_cancelled = await _is_agent_session_cancelled(session, session_id)
     # A new run can be registered before it commits its new revision.  Keep
     # the live registry state authoritative for running status during that
@@ -1646,7 +1719,9 @@ async def get_agent_session_changes(
         changes = await load_agent_session_changes(session, session_id)
         return JSONResponse(content=changes.to_payload())
     except NotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
 
 
 @router.get(
@@ -1825,7 +1900,9 @@ async def rollback_agent_session(
     if result.affected_child_run_ids:
         status_publisher = SubagentRunner(
             session_factory=_make_status_session_factory(session),
-            model_config=runner.model_config if runner is not None else {"max_context_tokens": 1},
+            model_config=runner.model_config
+            if runner is not None
+            else {"max_context_tokens": 1},
             project_id=runner.project_id if runner is not None else "",
         )
         for child_run_id in result.affected_child_run_ids:
@@ -1851,7 +1928,9 @@ async def rollback_agent_session(
     for child_thread_id, checkpoint_id in result.child_checkpoint_boundaries:
         try:
             if checkpoint_id:
-                await delete_checkpoints_after_for_thread(child_thread_id, checkpoint_id)
+                await delete_checkpoints_after_for_thread(
+                    child_thread_id, checkpoint_id
+                )
             else:
                 await delete_checkpoints_for_thread(child_thread_id)
         except Exception:
@@ -1877,12 +1956,12 @@ async def rollback_agent_session(
                 id=attachment["id"],
                 session_id=session_id,
                 storage_name=attachment["storage_name"],
-                    file_name=attachment["file_name"],
-                    mime_type=attachment["mime_type"],
-                    size_bytes=attachment["size_bytes"],
-                    content_length=attachment.get("content_length", 0),
-                    line_count=attachment.get("line_count", 0),
-                    width=attachment["width"],
+                file_name=attachment["file_name"],
+                mime_type=attachment["mime_type"],
+                size_bytes=attachment["size_bytes"],
+                content_length=attachment.get("content_length", 0),
+                line_count=attachment.get("line_count", 0),
+                width=attachment["width"],
                 height=attachment["height"],
                 url=attachment["url"],
             )
@@ -1953,7 +2032,9 @@ async def fork_agent_session(
     except Exception as exc:
         if fork_session_id:
             _SESSION_RUNNERS.pop(fork_session_id, None)
-        logger.bind(session_id=session_id).opt(exception=True).error("Agent 会话分叉失败")
+        logger.bind(session_id=session_id).opt(exception=True).error(
+            "Agent 会话分叉失败"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"分叉失败: {exc}",
@@ -1975,9 +2056,7 @@ async def cancel_agent_session(
     )
     session_lock_factory = getattr(registry, "session_lock", None)
     session_lock = (
-        session_lock_factory(session_id)
-        if callable(session_lock_factory)
-        else None
+        session_lock_factory(session_id) if callable(session_lock_factory) else None
     )
     if session_lock is not None:
         await session_lock.acquire()

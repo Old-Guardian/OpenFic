@@ -26,7 +26,11 @@ from loguru import logger
 from app.core.errors import LLMTimeoutError
 from app.models.clients.deepseek_payload import patch_deepseek_reasoning_payload
 from app.models.clients.google_vertex_auth import VertexConnectionContext
-from app.models.clients.model_factory import ModelConfig, ReasoningEffort, create_chat_model
+from app.models.clients.model_factory import (
+    ModelConfig,
+    ReasoningEffort,
+    create_chat_model,
+)
 
 
 DEFAULT_LLM_TIMEOUT = 600
@@ -48,6 +52,7 @@ class LLMConfig:
     base_url: str
     api_key: str
     model_id: str
+    provider_id: str | None = None
     custom_headers: dict[str, str] | None = None
     session_id: str | None = None
     temperature: float | None = 1.0
@@ -114,6 +119,7 @@ class LLMClient:
                 base_url=config.base_url,
                 api_key=config.api_key,
                 model_id=config.model_id,
+                provider_id=config.provider_id,
                 custom_headers=config.custom_headers,
                 session_id=config.session_id,
                 temperature=config.temperature,
