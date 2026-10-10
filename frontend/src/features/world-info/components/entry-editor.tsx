@@ -14,7 +14,12 @@ import { AliasInput, MarkdownEditor } from "@/components";
 import { toast } from "@/components/toast";
 import { useEditorSession } from "@/features/editor-session";
 import { useEditorAutoSaveSetting } from "@/features/settings/hooks/use-editor-auto-save-setting";
-import { useAutoSave, saveOnTitleBlur, type SaveReason, type SaveResult } from "@/hooks/use-auto-save";
+import {
+  useAutoSave,
+  saveOnTitleBlur,
+  type SaveReason,
+  type SaveResult,
+} from "@/hooks/use-auto-save";
 import { updateWorldInfoEntry } from "@/lib/api-client";
 import {
   getEditorContentLimit,
@@ -30,6 +35,10 @@ import type {
 
 import { resolveRemoteEntryEditorState } from "./entry-editor-state";
 
+function normalizeContent(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
+}
+
 interface EntryEditorProps {
   /** 条目数据 */
   entry: WorldInfoEntry;
@@ -43,6 +52,7 @@ interface EntryEditorProps {
   onScrollComplete?: () => void;
   /** Agent 运行时锁定编辑 */
   isAgentLocked?: boolean;
+  canSave?: () => boolean;
 }
 
 /** 自动保存防抖延迟（毫秒） */
@@ -55,24 +65,27 @@ export function EntryEditor({
   scrollToLine,
   onScrollComplete,
   isAgentLocked = false,
+  canSave,
 }: EntryEditorProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { enabled: autoSaveEnabled, isReady: isAutoSaveReady } = useEditorAutoSaveSetting();
 
+  const initialContent = normalizeContent(entry.content);
   const [name, setName] = useState(entry.name);
+  const [content, setContent] = useState(initialContent);
   const [aliases, setAliases] = useState<string[]>(entry.aliases ?? []);
   const [tokenCount, setTokenCount] = useState<number>(entry.tokenCount || 0);
   const [hasChanges, setHasChanges] = useState(false);
   const [dirtyRevision, setDirtyRevision] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
 
-  const savedContentRef = useRef(entry.content);
+  const savedContentRef = useRef(initialContent);
   const savedNameRef = useRef(entry.name);
   const savedAliasesRef = useRef<string[]>(entry.aliases ?? []);
   const lastSavedBaselineRef = useRef({
     name: entry.name,
-    content: entry.content,
+    content: initialContent,
     aliases: entry.aliases ?? [],
   });
   const hasChangesRef = useRef(false);
@@ -99,7 +112,11 @@ export function EntryEditor({
   );
 
   const updateCaches = useCallback(
-    (updated: WorldInfoEntry) => {
+    async (updated: WorldInfoEntry) => {
+      await queryClient.cancelQueries(
+        { queryKey: ["world-info-entry-detail", entry.id], exact: true },
+        { revert: false },
+      );
       queryClient.setQueryData(["world-info-entry-detail", entry.id], updated);
       queryClient.setQueryData(
         ["world-info-entries", worldInfoId],
@@ -126,11 +143,11 @@ export function EntryEditor({
 
   const handleSave = useCallback(
     async (reason: SaveReason = "manual", revision?: number): Promise<SaveResult> => {
-      if (isAgentLocked) {
+      if (isAgentLocked || (canSave && !canSave())) {
         return { status: "blocked", reason: "Agent is running" };
       }
 
-      const content = savedContentRef.current;
+      const currentContent = normalizeContent(savedContentRef.current);
       const newName = savedNameRef.current.trim();
       const nextAliases = savedAliasesRef.current;
 
@@ -139,9 +156,9 @@ export function EntryEditor({
         return { status: "blocked", reason: "Name required" };
       }
 
-      const contentLimit = getEditorContentLimit(content);
+      const contentLimit = getEditorContentLimit(currentContent);
       if (!contentLimit.isWithinLimit) {
-        showContentLimitToast(content);
+        showContentLimitToast(currentContent);
         return {
           status: "blocked",
           reason: t("common.editorContentTooLarge", {
@@ -167,7 +184,7 @@ export function EntryEditor({
       }
 
       const targetRevision = revision ?? dirtyRevision;
-      const newTokenCount = countTokens(content);
+      const newTokenCount = countTokens(currentContent);
       setTokenCount(newTokenCount);
 
       isSavingRef.current = true;
@@ -176,20 +193,21 @@ export function EntryEditor({
       try {
         const updated = await updateWorldInfoEntry(entry.id, {
           name: newName,
-          content,
+          content: currentContent,
           tokenCount: newTokenCount,
           aliases: nextAliases,
         });
-        updateCaches(updated);
+        await updateCaches(updated);
+        const savedNormalizedContent = normalizeContent(updated.content);
         lastSavedBaselineRef.current = {
           name: updated.name,
-          content: updated.content,
+          content: savedNormalizedContent,
           aliases: updated.aliases ?? [],
         };
 
         const stillDirty =
           savedNameRef.current.trim() !== updated.name ||
-          savedContentRef.current !== updated.content ||
+          normalizeContent(savedContentRef.current) !== savedNormalizedContent ||
           JSON.stringify(savedAliasesRef.current) !== JSON.stringify(updated.aliases ?? []);
 
         hasChangesRef.current = stillDirty;
@@ -214,16 +232,25 @@ export function EntryEditor({
         setIsSaving(false);
       }
     },
-    [dirtyRevision, entries, entry.id, isAgentLocked, showContentLimitToast, t, updateCaches],
+    [
+      canSave,
+      dirtyRevision,
+      entries,
+      entry.id,
+      isAgentLocked,
+      showContentLimitToast,
+      t,
+      updateCaches,
+    ],
   );
 
   const autoSave = useAutoSave({
     documentKey: `world-info:${entry.id}`,
-    enabled: isAutoSaveReady && autoSaveEnabled && !isAgentLocked,
+    enabled: isAutoSaveReady && autoSaveEnabled && !isAgentLocked && (!canSave || canSave()),
     delayMs: AUTO_SAVE_DELAY,
     dirtyRevision,
     hasChanges,
-    blockedReason: isAgentLocked ? "Agent is running" : null,
+    blockedReason: isAgentLocked || (canSave && !canSave()) ? "Agent is running" : null,
     save: (reason, rev) => handleSave(reason, rev),
   });
 
@@ -247,6 +274,7 @@ export function EntryEditor({
       savedContentRef.current = baseline.content;
       savedAliasesRef.current = baseline.aliases;
       setName(baseline.name);
+      setContent(baseline.content);
       setAliases(baseline.aliases);
       setTokenCount(countTokens(baseline.content));
       editorRef.current?.commands.setContent(baseline.content, {
@@ -275,30 +303,40 @@ export function EntryEditor({
   }, []);
 
   const handleContentChange = useCallback((markdown: string) => {
-    savedContentRef.current = markdown;
-    setTokenCount(countTokens(markdown));
+    const normalized = normalizeContent(markdown);
+    savedContentRef.current = normalized;
+    setContent(normalized);
+    setTokenCount(countTokens(normalized));
     hasChangesRef.current = true;
     setHasChanges(true);
     setDirtyRevision((r) => r + 1);
   }, []);
 
   useEffect(() => {
+    const normalizedLocalContent = normalizeContent(savedContentRef.current);
+    const normalizedRemoteContent = normalizeContent(entry.content);
     const nextState = resolveRemoteEntryEditorState(
       {
         name: savedNameRef.current,
-        content: savedContentRef.current,
+        content: normalizedLocalContent,
         tokenCount,
         aliases: savedAliasesRef.current,
       },
       {
         name: entry.name,
-        content: entry.content,
+        content: normalizedRemoteContent,
         tokenCount: entry.tokenCount || 0,
         aliases: entry.aliases ?? [],
       },
       hasChangesRef.current,
     );
     if (hasChangesRef.current) return;
+
+    const hasSameContent =
+      savedNameRef.current === nextState.name &&
+      normalizeContent(savedContentRef.current) === nextState.content &&
+      JSON.stringify(savedAliasesRef.current) === JSON.stringify(nextState.aliases);
+    if (hasSameContent) return;
 
     savedNameRef.current = nextState.name;
     savedContentRef.current = nextState.content;
@@ -309,9 +347,24 @@ export function EntryEditor({
       aliases: nextState.aliases,
     };
     setName(nextState.name);
+    setContent(nextState.content);
     setTokenCount(nextState.tokenCount);
     setAliases(nextState.aliases);
   }, [entry.aliases, entry.content, entry.name, entry.tokenCount, tokenCount]);
+
+  useEffect(() => {
+    return () => {
+      if (hasChangesRef.current && autoSaveEnabled && !isAgentLocked && (!canSave || canSave())) {
+        void handleSave("leave");
+      }
+    };
+  }, [autoSaveEnabled, canSave, handleSave, isAgentLocked]);
+
+  const isSaveBlocked =
+    isAgentLocked ||
+    Boolean(canSave && !canSave()) ||
+    !name.trim() ||
+    !getEditorContentLimit(content).isWithinLimit;
 
   useEffect(() => {
     if (scrollToLine == null || scrollToLine < 1 || scrolledRef.current) return;
@@ -358,11 +411,12 @@ export function EntryEditor({
           disabled={isAgentLocked}
         />
       }
-      content={entry.content}
+      content={content}
       onContentChange={handleContentChange}
       onSave={() => void autoSave.save("manual")}
       onTitleBlurSave={() => saveOnTitleBlur(autoSaveEnabled, autoSave.save)}
       isSaving={combinedIsSaving}
+      isSaveBlocked={isSaveBlocked}
       hasChanges={hasChanges}
       placeholder={t("worldInfo.contentPlaceholder")}
       titlePlaceholder={t("worldInfo.entryNamePlaceholder")}
