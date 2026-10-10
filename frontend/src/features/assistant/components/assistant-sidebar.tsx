@@ -50,8 +50,8 @@ import type {
 } from "@/lib/agent.types";
 import {
   fetchActiveSubagents,
+  fetchAgentSessionChangeSummary,
   fetchAgentSessionState,
-  fetchAgentSessionChanges,
   fetchTask,
   subscribeBackgroundEvents,
 } from "@/lib/api-client";
@@ -352,10 +352,17 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
     const [isSessionChangesOpen, setIsSessionChangesOpen] = useState(false);
     const [sessionChangesDialogSummary, setSessionChangesDialogSummary] =
       useState<AgentChangeSummary | null>(null);
-    const handleOpenChangeSummary = useCallback((summary: AgentChangeSummary) => {
-      setSessionChangesDialogSummary(summary);
-      setIsSessionChangesOpen(true);
-    }, []);
+    const [sessionChangesDialogRevisionId, setSessionChangesDialogRevisionId] = useState<
+      string | null
+    >(null);
+    const handleOpenChangeSummary = useCallback(
+      (summary: AgentChangeSummary, revisionId?: string) => {
+        setSessionChangesDialogSummary(summary);
+        setSessionChangesDialogRevisionId(revisionId ?? null);
+        setIsSessionChangesOpen(true);
+      },
+      [],
+    );
     const [isLoadingTask, setIsLoadingTask] = useState(false);
     const [currentTaskTitle, setCurrentTaskTitle] = useState<string>("");
     const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
@@ -584,7 +591,7 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
             return;
           }
           const sessionId = fullTask.agentSessionId;
-          const sessionChanges = await fetchAgentSessionChanges(sessionId);
+          const sessionChanges = await fetchAgentSessionChangeSummary(sessionId);
           agentSidebarRef.current?.loadSession(sessionId, agentMessages, {
             reconnect: false,
             isRemoteRunning: false,
@@ -1033,7 +1040,7 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
             fetchTask,
             fetchAgentSessionState,
             fetchActiveSubagents,
-            fetchAgentSessionChanges,
+            fetchAgentSessionChangeSummary,
           });
           const fullTask = bundle.task;
 
@@ -1290,6 +1297,7 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
     const handleOpenSessionChanges = useCallback(() => {
       if (!canOpenSessionChanges) return;
       setSessionChangesDialogSummary(null);
+      setSessionChangesDialogRevisionId(null);
       setIsSessionChangesOpen(true);
     }, [canOpenSessionChanges]);
 
@@ -1889,6 +1897,10 @@ export const AssistantSidebar = forwardRef<AssistantSidebarHandle, AssistantSide
         <AgentSessionChangesDialog
           key={agentSidebar.sessionId ?? "no-session"}
           changes={agentSidebar.changes}
+          details={agentSidebar.changeDetails}
+          detailsRevisionId={agentSidebar.changeDetailsRevisionId}
+          onLoadDetails={agentSidebar.loadChangeDetails}
+          revisionId={sessionChangesDialogRevisionId}
           summaryOverride={sessionChangesDialogSummary}
           open={isSessionChangesOpen}
           onOpenChange={setIsSessionChangesOpen}

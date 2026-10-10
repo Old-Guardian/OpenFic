@@ -348,7 +348,7 @@ const TOOL_REGISTRY = {
     getDetail: (message) => {
       const note = getNotePayload(message);
       const noteLabel = note.title ?? formatNoteRefLabel(getToolRef(message, "note_ref"));
-      const data = message.toolResult?.data;
+      const data = getToolResultData(message);
       const metadata = isRecord(data) && isRecord(data.metadata) ? data.metadata : null;
       const noteDiff = isRecord(metadata?.note_diff) ? metadata.note_diff : null;
       const target = isRecord(data) && isRecord(data.target_category) ? data.target_category : null;
@@ -674,7 +674,12 @@ const TOOL_REGISTRY = {
     getTitle: () => i18n.t("assistant.tools.searchWorldEntries"),
     getDetail: (message) => getKnowledgeSearchDetail(message),
     defaultExpanded: () => false,
-    render: (message) => <KnowledgeSearchToolMessage message={message} kind="world_entry" />,
+    render: (message) => (
+      <KnowledgeSearchToolMessage
+        message={message}
+        kind="world_entry"
+      />
+    ),
   },
   search_characters: {
     toolName: "search_characters",
@@ -686,7 +691,12 @@ const TOOL_REGISTRY = {
     getTitle: () => i18n.t("assistant.tools.searchCharacters"),
     getDetail: (message) => getKnowledgeSearchDetail(message),
     defaultExpanded: () => false,
-    render: (message) => <KnowledgeSearchToolMessage message={message} kind="character" />,
+    render: (message) => (
+      <KnowledgeSearchToolMessage
+        message={message}
+        kind="character"
+      />
+    ),
   },
   read_world_entries: {
     toolName: "read_world_entries",
@@ -698,7 +708,12 @@ const TOOL_REGISTRY = {
     getTitle: () => i18n.t("assistant.tools.readWorldEntries"),
     getDetail: (message) => getKnowledgeReadDetail(message),
     defaultExpanded: () => false,
-    render: (message) => <KnowledgeReadToolMessage message={message} kind="world_entry" />,
+    render: (message) => (
+      <KnowledgeReadToolMessage
+        message={message}
+        kind="world_entry"
+      />
+    ),
   },
   read_characters: {
     toolName: "read_characters",
@@ -710,7 +725,12 @@ const TOOL_REGISTRY = {
     getTitle: () => i18n.t("assistant.tools.readCharacters"),
     getDetail: (message) => getKnowledgeReadDetail(message),
     defaultExpanded: () => false,
-    render: (message) => <KnowledgeReadToolMessage message={message} kind="character" />,
+    render: (message) => (
+      <KnowledgeReadToolMessage
+        message={message}
+        kind="character"
+      />
+    ),
   },
   create_world_entry: {
     toolName: "create_world_entry",

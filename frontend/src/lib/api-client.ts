@@ -2226,7 +2226,6 @@ function normalizeUtcDateString(value: unknown): string {
 function transformTaskMessage(raw: Record<string, unknown>): Task["messages"][number] {
   return {
     id: raw.id as string,
-    taskId: (raw.task_id ?? raw.taskId) as string | null | undefined,
     role: raw.role as "system" | "user" | "assistant" | "tool",
     agentId: (raw.agent_id ?? raw.agentId) as string | null | undefined,
     content: raw.content as string,
@@ -2420,8 +2419,20 @@ export async function fetchAgentSessionState(
   };
 }
 
-export async function fetchAgentSessionChanges(sessionId: string): Promise<AgentSessionChanges> {
+export async function fetchAgentSessionChangeSummary(
+  sessionId: string,
+): Promise<AgentSessionChanges> {
   const response = await apiClient.get(`/agent/sessions/${sessionId}/changes`);
+  return transformAgentSessionChanges(response.data, sessionId);
+}
+
+export async function fetchAgentSessionChanges(
+  sessionId: string,
+  revisionId?: string,
+): Promise<AgentSessionChanges> {
+  const response = await apiClient.get(`/agent/sessions/${sessionId}/changes/details`, {
+    params: revisionId ? { revision_id: revisionId } : undefined,
+  });
   return transformAgentSessionChanges(response.data, sessionId);
 }
 

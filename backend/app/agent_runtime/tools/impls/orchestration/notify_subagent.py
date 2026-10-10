@@ -51,6 +51,7 @@ class NotifySubagentTool(AgentTool):
         使用说明：
         - 恢复的Subagent会话将沿用此前完成时的状态（消息历史、工具输出等），不要提供重复的上下文信息
         - 继续会话时，聚焦于当前任务，明确说明下一步的要求
+        - 同一批调用中，每个 dispatch_id 只允许调用一次通知；若需多次通知，请在前一次回复后再发
         - 一个Subagent会话被关闭后，对应dispatch_id就会失效且无法使用
     """)
     access_level: str = "readonly"

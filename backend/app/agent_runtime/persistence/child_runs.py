@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
+from app.agent_runtime.persistence import compaction_repo
 from app.agent_runtime.persistence import repo as message_repo
 from app.agent_runtime.persistence.model import (
     AgentChildRun,
@@ -207,6 +208,38 @@ async def list_child_runs_for_parents(
         select(AgentChildRun)
         .where(col(AgentChildRun.parent_session_id).in_(normalized_ids))
         .order_by(col(AgentChildRun.parent_session_id), col(AgentChildRun.created_at).asc())
+    )
+    return list(result.scalars().all())
+
+
+async def list_descendant_child_runs(
+    session: AsyncSession,
+    parent_session_id: str,
+    parent_revision_id: str | None = None,
+) -> list[AgentChildRun]:
+    """Load all descendant child runs with one recursive database query."""
+    parent_threads = select(literal(parent_session_id).label("thread_id")).cte(
+        "descendant_parent_threads",
+        recursive=True,
+    )
+    descendant_threads = select(
+        col(AgentChildRun.child_thread_id).label("thread_id")
+    ).join(
+        parent_threads,
+        col(AgentChildRun.parent_session_id) == parent_threads.c.thread_id,
+    )
+    if parent_revision_id is not None:
+        descendant_threads = descendant_threads.where(
+            col(AgentChildRun.parent_revision_id) == parent_revision_id
+        )
+    parent_threads = parent_threads.union(descendant_threads)
+    query = select(AgentChildRun).where(
+        col(AgentChildRun.parent_session_id).in_(select(parent_threads.c.thread_id))
+    )
+    if parent_revision_id is not None:
+        query = query.where(col(AgentChildRun.parent_revision_id) == parent_revision_id)
+    result = await session.execute(
+        query.order_by(col(AgentChildRun.parent_session_id), col(AgentChildRun.created_at).asc())
     )
     return list(result.scalars().all())
 
@@ -576,6 +609,11 @@ async def rollback_child_runs_for_parent_revisions(
         child_run_ids.append(child_run_id)
 
         if first_request.child_user_message_seq is not None:
+            await compaction_repo.delete_intersecting_or_after(
+                session,
+                row.child_thread_id,
+                first_request.child_user_message_seq,
+            )
             await message_repo.clear_tool_message_prune_marks(
                 session,
                 session_id=row.child_thread_id,

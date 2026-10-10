@@ -26,6 +26,7 @@ from app.agent_runtime.persistence.compaction_types import (
     PersistedCompaction,
 )
 from app.agent_runtime.persistence.errors import PersistenceWriteError
+from app.agent_runtime.runner.event_scope import COMPACTION_EVENT_TAG
 from app.models.clients.model_factory import ModelConfig, create_chat_model
 from app.models.clients.model_params import normalize_reasoning_effort
 from app.models.repos import model_provider_repo, model_repo
@@ -232,7 +233,9 @@ async def compact_window(
         client_model_config = to_client_model_config(effective_model_config)
         client_model_config["session_id"] = state["session_id"]
         model = create_chat_model(ModelConfig(**client_model_config))
-        response = await model.ainvoke(messages)
+        response = await model.ainvoke(
+            messages, config={"tags": [COMPACTION_EVENT_TAG]}
+        )
     except Exception as exc:
         logger.opt(exception=True).error("Compaction LLM request failed")
         error = CompactionError("llm_error", "压缩失败，当前请求已中止")

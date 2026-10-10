@@ -502,7 +502,7 @@ async def test_subagent_runner_uses_child_thread_history_and_parent_task(
         and message.agent_id == "writer"
         for message in child_messages
     )
-    assert [message.content for message in captured["initial_state"]["messages"]] == [
+    assert [message.content for message in captured["initial_state"]["messages"].value] == [
         "child-only",
         "write",
     ]
@@ -646,6 +646,8 @@ async def test_subagent_runner_passes_compaction_sinks_to_child_graph(
             configurable = config["configurable"]
             assert callable(configurable["agent_event_sink"])
             assert callable(configurable["compaction_usage_sink"])
+            assert configurable["model_config"]["max_context_tokens"] == 8000
+            assert callable(configurable["history_seq_resolver"])
 
             await configurable["agent_event_sink"](
                 "agent:compaction_start",
@@ -1034,7 +1036,7 @@ async def test_subagent_runner_drains_queued_notify_requests_on_same_child_threa
 
     class FakeGraph:
         async def astream_events(self, initial_state, config=None, version=None):
-            last_message = initial_state["messages"][-1]
+            last_message = initial_state["messages"].value[-1]
             yield {
                 "event": "on_chain_end",
                 "data": {"output": {
@@ -1046,7 +1048,7 @@ async def test_subagent_runner_drains_queued_notify_requests_on_same_child_threa
             }
 
         async def ainvoke(self, initial_state, config=None):
-            last_message = initial_state["messages"][-1]
+            last_message = initial_state["messages"].value[-1]
             return {
                 "messages": [AIMessage(content=f"reply:{last_message.content}")],
                 "iteration_count": 1,

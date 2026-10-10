@@ -105,6 +105,7 @@ class ReactState(TypedDict, total=False):
     tool_call: ToolCall
     tool_batch_offset: int
     tool_dispatch_denied: bool
+    tool_notify_denied: bool
     tool_phase: Literal["prepare", "execute"]
     tool_outcomes: Annotated[list[dict[str, Any]], _add_messages]
     tool_prepared_outcomes: Annotated[list[dict[str, Any]], _add_messages]
@@ -772,6 +773,9 @@ def create_react_agent(
 
         if isinstance(runtime_state, Mapping) and db_session is not None:
             node_messages = [_to_history_dict(m) for m in state["messages"]]
+            history_seq_resolver = configurable.get("history_seq_resolver")
+            if callable(history_seq_resolver):
+                await _maybe_await(history_seq_resolver(node_messages))
             runtime_context = configurable.get("runtime_context")
             effective_runtime_state = dict(runtime_state)
             if isinstance(runtime_context, Mapping):
@@ -1107,6 +1111,18 @@ def create_react_agent(
                 "success": False,
                 "latency_ms": int((time.perf_counter() - started_at) * 1000),
             }
+
+        if state.get("tool_notify_denied") and phase == "prepare":
+            failure = ToolFailure(
+                code="conflict",
+                message=(
+                    "notify_subagent allows only one message per subagent in a tool batch; "
+                    "wait for the first notification to finish before sending another"
+                ),
+                trace={"source": "tool_dispatch"},
+            )
+            log_tool_failure(failure, tool_name=tool_name, tool_call_id=tool_id)
+            return outcome_update(failure_outcome(failure))
 
         if state.get("tool_dispatch_denied"):
             failure = ToolFailure(
@@ -1480,6 +1496,7 @@ def create_react_agent(
         if last_message is None:
             return []
         dispatch_count = 0
+        notified_dispatch_ids: set[str] = set()
         sends: list[Send] = []
         for slot in range(TOOL_BATCH_SIZE):
             index = slot
@@ -1489,9 +1506,20 @@ def create_react_agent(
                 else None
             )
             denied = False
+            notify_denied = False
             if tool_call is not None and tool_call["name"] == "dispatch_subagent":
                 denied = dispatch_count >= 10
                 dispatch_count += 1
+            if (
+                tool_call is not None
+                and tool_call["name"] == "notify_subagent"
+                and not is_malformed_tool_call(tool_call)
+            ):
+                args = tool_call.get("args")
+                dispatch_id = args.get("dispatch_id") if isinstance(args, dict) else None
+                if isinstance(dispatch_id, str) and dispatch_id:
+                    notify_denied = dispatch_id in notified_dispatch_ids
+                    notified_dispatch_ids.add(dispatch_id)
             sends.append(
                 Send(
                     f"tool_exec_{slot}",
@@ -1499,6 +1527,7 @@ def create_react_agent(
                         "tool_index": index,
                         "tool_call": tool_call,
                         "tool_dispatch_denied": denied,
+                        "tool_notify_denied": notify_denied,
                         "tool_phase": state.get("tool_phase", "prepare"),
                         "tool_prepared_outcomes": state.get(
                             "tool_prepared_outcomes", []

@@ -360,7 +360,7 @@ asyncio.run(main())
     )
     task = None
     try:
-        assert await asyncio.wait_for(child.stdout.readline(), 30) == b"locked\n"
+        assert (await asyncio.wait_for(child.stdout.readline(), 30)).rstrip() == b"locked"
 
         async def forbidden_refresh(_credentials):
             pytest.fail("must use the other process's committed replacement")
