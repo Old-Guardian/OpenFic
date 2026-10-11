@@ -7,7 +7,12 @@ import { AliasInput, MarkdownEditor } from "@/components";
 import { toast } from "@/components/toast";
 import { useEditorSession } from "@/features/editor-session";
 import { useEditorAutoSaveSetting } from "@/features/settings/hooks/use-editor-auto-save-setting";
-import { useAutoSave, saveOnTitleBlur, type SaveReason, type SaveResult } from "@/hooks/use-auto-save";
+import {
+  useAutoSave,
+  saveOnTitleBlur,
+  type SaveReason,
+  type SaveResult,
+} from "@/hooks/use-auto-save";
 import type { Character } from "@/lib/character.types";
 import {
   getEditorContentLimit,
@@ -18,12 +23,21 @@ import { countTokens } from "@/lib/tiktoken-utils";
 
 const AUTO_SAVE_DELAY = 1500;
 
+function normalizeContent(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
+}
+
 interface CharacterEditorProps {
   character: Character | null;
   isSaving?: boolean;
   isLoading?: boolean;
   isAgentLocked?: boolean;
-  onSave: (data: { name: string; description: string; aliases: string[] }) => Promise<void> | void;
+  canSave?: () => boolean;
+  onSave: (data: {
+    name: string;
+    description: string;
+    aliases: string[];
+  }) => Promise<Character | null | void> | Character | null | void;
 }
 
 export function CharacterEditor({
@@ -31,15 +45,17 @@ export function CharacterEditor({
   isSaving = false,
   isLoading = false,
   isAgentLocked = false,
+  canSave,
   onSave,
 }: CharacterEditorProps) {
   const { t } = useTranslation();
   const { enabled: autoSaveEnabled, isReady: isAutoSaveReady } = useEditorAutoSaveSetting();
 
+  const initialDescription = normalizeContent(character?.description ?? "");
   const [name, setName] = useState(character?.name ?? "");
-  const [description, setDescription] = useState(character?.description ?? "");
+  const [description, setDescription] = useState(initialDescription);
   const [aliases, setAliases] = useState<string[]>(character?.aliases ?? []);
-  const [tokenCount, setTokenCount] = useState(countTokens(character?.description ?? ""));
+  const [tokenCount, setTokenCount] = useState(countTokens(initialDescription));
   const [hasChanges, setHasChanges] = useState(false);
   const [dirtyRevision, setDirtyRevision] = useState(0);
   const [isLocalSaving, setIsLocalSaving] = useState(false);
@@ -47,12 +63,12 @@ export function CharacterEditor({
   const editorRef = useRef<Editor | null>(null);
   const latestValueRef = useRef({
     name: character?.name ?? "",
-    description: character?.description ?? "",
+    description: initialDescription,
     aliases: character?.aliases ?? [],
   });
   const lastSavedBaselineRef = useRef({
     name: character?.name ?? "",
-    description: character?.description ?? "",
+    description: initialDescription,
     aliases: character?.aliases ?? [],
   });
   const hasChangesRef = useRef(false);
@@ -79,7 +95,7 @@ export function CharacterEditor({
   const handleSave = useCallback(
     async (reason: SaveReason = "manual", revision?: number): Promise<SaveResult> => {
       if (!character) return { status: "unchanged" };
-      if (isAgentLocked) {
+      if (isAgentLocked || (canSave && !canSave())) {
         return { status: "blocked", reason: "Agent is running" };
       }
 
@@ -88,7 +104,7 @@ export function CharacterEditor({
         return { status: "blocked", reason: t("characters.nameRequired", "角色名称不能为空") };
       }
 
-      const currentDescription = latestValueRef.current.description;
+      const currentDescription = normalizeContent(latestValueRef.current.description);
       const contentLimit = getEditorContentLimit(currentDescription);
       if (!contentLimit.isWithinLimit) {
         showContentLimitToast(currentDescription);
@@ -114,17 +130,44 @@ export function CharacterEditor({
       setIsLocalSaving(true);
       isSavingRef.current = true;
       try {
-        await onSave({ name: nextName, description: currentDescription, aliases: nextAliases });
-        lastSavedBaselineRef.current = {
+        const updated = await onSave({
           name: nextName,
           description: currentDescription,
           aliases: nextAliases,
+        });
+        const savedDescription = normalizeContent(
+          updated &&
+            typeof updated === "object" &&
+            "description" in updated &&
+            typeof updated.description === "string"
+            ? updated.description
+            : currentDescription,
+        );
+        const savedName =
+          updated &&
+          typeof updated === "object" &&
+          "name" in updated &&
+          typeof updated.name === "string"
+            ? updated.name
+            : nextName;
+        const savedAliases =
+          updated &&
+          typeof updated === "object" &&
+          "aliases" in updated &&
+          Array.isArray(updated.aliases)
+            ? updated.aliases
+            : nextAliases;
+
+        lastSavedBaselineRef.current = {
+          name: savedName,
+          description: savedDescription,
+          aliases: savedAliases,
         };
 
         const stillDirty =
-          latestValueRef.current.name.trim() !== nextName ||
-          latestValueRef.current.description !== currentDescription ||
-          JSON.stringify(latestValueRef.current.aliases) !== JSON.stringify(nextAliases);
+          latestValueRef.current.name.trim() !== savedName ||
+          normalizeContent(latestValueRef.current.description) !== savedDescription ||
+          JSON.stringify(latestValueRef.current.aliases) !== JSON.stringify(savedAliases);
 
         hasChangesRef.current = stillDirty;
         setHasChanges(stillDirty);
@@ -143,16 +186,16 @@ export function CharacterEditor({
         isSavingRef.current = false;
       }
     },
-    [character, dirtyRevision, isAgentLocked, onSave, showContentLimitToast, t],
+    [canSave, character, dirtyRevision, isAgentLocked, onSave, showContentLimitToast, t],
   );
 
   const autoSave = useAutoSave({
     documentKey: character ? `character:${character.id}` : "",
-    enabled: isAutoSaveReady && autoSaveEnabled && !isAgentLocked,
+    enabled: isAutoSaveReady && autoSaveEnabled && !isAgentLocked && (!canSave || canSave()),
     delayMs: AUTO_SAVE_DELAY,
     dirtyRevision,
     hasChanges,
-    blockedReason: isAgentLocked ? "Agent is running" : null,
+    blockedReason: isAgentLocked || (canSave && !canSave()) ? "Agent is running" : null,
     save: (reason, rev) => handleSave(reason, rev),
   });
 
@@ -209,9 +252,10 @@ export function CharacterEditor({
   }, []);
 
   const handleContentChange = useCallback((value: string) => {
-    setDescription(value);
-    setTokenCount(countTokens(value));
-    latestValueRef.current.description = value;
+    const normalized = normalizeContent(value);
+    setDescription(normalized);
+    setTokenCount(countTokens(normalized));
+    latestValueRef.current.description = normalized;
     hasChangesRef.current = true;
     setHasChanges(true);
     setDirtyRevision((r) => r + 1);
@@ -221,29 +265,44 @@ export function CharacterEditor({
     if (!character) return;
     if (hasChangesRef.current) return;
 
+    const normalizedDescription = normalizeContent(character.description ?? "");
     const hasSameContent =
       latestValueRef.current.name === character.name &&
-      latestValueRef.current.description === character.description &&
+      normalizeContent(latestValueRef.current.description) === normalizedDescription &&
       JSON.stringify(latestValueRef.current.aliases) === JSON.stringify(character.aliases ?? []);
     if (hasSameContent) return;
 
     setName(character.name);
-    setDescription(character.description);
+    setDescription(normalizedDescription);
     setAliases(character.aliases ?? []);
-    setTokenCount(countTokens(character.description));
+    setTokenCount(countTokens(normalizedDescription));
     latestValueRef.current = {
       name: character.name,
-      description: character.description,
+      description: normalizedDescription,
       aliases: character.aliases ?? [],
     };
     lastSavedBaselineRef.current = {
       name: character.name,
-      description: character.description,
+      description: normalizedDescription,
       aliases: character.aliases ?? [],
     };
     hasChangesRef.current = false;
     setHasChanges(false);
   }, [character]);
+
+  useEffect(() => {
+    return () => {
+      if (hasChangesRef.current && autoSaveEnabled && !isAgentLocked && (!canSave || canSave())) {
+        void handleSave("leave");
+      }
+    };
+  }, [autoSaveEnabled, canSave, handleSave, isAgentLocked]);
+
+  const isSaveBlocked =
+    isAgentLocked ||
+    Boolean(canSave && !canSave()) ||
+    !name.trim() ||
+    !getEditorContentLimit(description).isWithinLimit;
 
   if (isLoading) {
     return (
@@ -315,6 +374,7 @@ export function CharacterEditor({
       onSave={() => void autoSave.save("manual")}
       onTitleBlurSave={() => saveOnTitleBlur(autoSaveEnabled, autoSave.save)}
       isSaving={combinedIsSaving}
+      isSaveBlocked={isSaveBlocked}
       hasChanges={hasChanges}
       placeholder={t("characters.descriptionPlaceholder")}
       titlePlaceholder={t("characters.namePlaceholder")}

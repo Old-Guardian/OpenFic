@@ -66,7 +66,7 @@ apiClient.interceptors.response.use(
       handleAuthenticationFailure();
     }
     // 开发环境记录错误日志
-    if (import.meta.env.DEV) {
+    if (import.meta.env.DEV && !error.config?.url?.includes("/openai-codex/")) {
       console.error("API Error:", error);
     }
     return Promise.reject(error);
@@ -395,8 +395,11 @@ export async function fetchCharactersByProject(projectId: string): Promise<Chara
   };
 }
 
-export async function fetchCharacter(characterId: string): Promise<Character> {
-  const response = await apiClient.get(`/characters/${characterId}`);
+export async function fetchCharacter(
+  characterId: string,
+  signal?: AbortSignal,
+): Promise<Character> {
+  const response = await apiClient.get(`/characters/${characterId}`, { signal });
   return transformCharacter(response.data);
 }
 
@@ -1632,8 +1635,11 @@ export async function fetchWorldInfoEntries(
 /**
  * 获取单个条目
  */
-export async function fetchWorldInfoEntry(entryId: string): Promise<WorldInfoEntry> {
-  const response = await apiClient.get(`/world-info-entries/${entryId}`);
+export async function fetchWorldInfoEntry(
+  entryId: string,
+  signal?: AbortSignal,
+): Promise<WorldInfoEntry> {
+  const response = await apiClient.get(`/world-info-entries/${entryId}`, { signal });
   return transformWorldInfoEntry(response.data);
 }
 
@@ -2220,7 +2226,6 @@ function normalizeUtcDateString(value: unknown): string {
 function transformTaskMessage(raw: Record<string, unknown>): Task["messages"][number] {
   return {
     id: raw.id as string,
-    taskId: (raw.task_id ?? raw.taskId) as string | null | undefined,
     role: raw.role as "system" | "user" | "assistant" | "tool",
     agentId: (raw.agent_id ?? raw.agentId) as string | null | undefined,
     content: raw.content as string,
@@ -2414,8 +2419,20 @@ export async function fetchAgentSessionState(
   };
 }
 
-export async function fetchAgentSessionChanges(sessionId: string): Promise<AgentSessionChanges> {
+export async function fetchAgentSessionChangeSummary(
+  sessionId: string,
+): Promise<AgentSessionChanges> {
   const response = await apiClient.get(`/agent/sessions/${sessionId}/changes`);
+  return transformAgentSessionChanges(response.data, sessionId);
+}
+
+export async function fetchAgentSessionChanges(
+  sessionId: string,
+  revisionId?: string,
+): Promise<AgentSessionChanges> {
+  const response = await apiClient.get(`/agent/sessions/${sessionId}/changes/details`, {
+    params: revisionId ? { revision_id: revisionId } : undefined,
+  });
   return transformAgentSessionChanges(response.data, sessionId);
 }
 

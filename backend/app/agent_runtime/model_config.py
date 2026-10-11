@@ -12,6 +12,8 @@ def without_api_key(model_config: Mapping[str, Any]) -> dict[str, Any]:
     persisted_config.pop("api_key", None)
     persisted_config.pop("custom_headers", None)
     persisted_config.pop("vertex_connection", None)
+    for secret_key in ("access_token", "refresh_token", "id_token", "credentials"):
+        persisted_config.pop(secret_key, None)
     return persisted_config
 
 

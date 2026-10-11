@@ -1381,9 +1381,41 @@ class TestAgentAPI:
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
         assert data["session_id"] == session_id
-        assert data["state"]["session_id"] == session_id
+        assert data["state"] == {"agent_key": "build"}
         assert data["is_running"] is True
         fake_registry.is_running.assert_awaited_once_with(session_id)
+
+    async def test_get_session_state_returns_only_agent_key_from_checkpoint(
+        self,
+        client: AsyncClient,
+    ) -> None:
+        fake_checkpointer = SimpleNamespace(
+            aget_tuple=AsyncMock(
+                return_value=SimpleNamespace(
+                    checkpoint={
+                        "channel_values": {
+                            "agent_key": "writer",
+                            "messages": [{"content": "large transcript"}],
+                            "model_config": {"model_id": "model-1"},
+                        }
+                    },
+                    pending_writes=[],
+                )
+            )
+        )
+        fake_registry = SimpleNamespace(is_running=AsyncMock(return_value=False))
+
+        with patch(
+            "app.api.routers.agent_runtime.get_checkpointer",
+            new=AsyncMock(return_value=fake_checkpointer),
+        ), patch(
+            "app.api.routers.agent_runtime.get_agent_run_registry",
+            return_value=fake_registry,
+        ):
+            response = await client.get("/api/v1/agent/sessions/session-summary")
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["state"] == {"agent_key": "writer"}
 
     async def test_get_session_state_returns_pending_interrupts(
         self,
@@ -2841,7 +2873,7 @@ class TestAgentAPI:
         data = response.json()
         assert data["session_id"] == session_id
         assert data["is_running"] is False
-        assert data["state"]["model_config"]["model_id"] == "gpt-3.5-turbo"
+        assert data["state"] == {"agent_key": "build"}
         assert session_id not in _SESSION_RUNNERS
 
     async def test_get_session_state_allows_deleted_model_without_runner(
@@ -2866,7 +2898,7 @@ class TestAgentAPI:
         response = await client.get(f"/api/v1/agent/sessions/{session_id}")
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.json()["state"]["model_config"]["model_record_id"] == target["model_id"]
+        assert response.json()["state"] == {"agent_key": "build"}
         assert session_id not in _SESSION_RUNNERS
 
     async def test_get_session_state_reads_legacy_model_config_without_record_id(
@@ -2898,7 +2930,7 @@ class TestAgentAPI:
         response = await client.get(f"/api/v1/agent/sessions/{session_id}")
 
         assert response.status_code == status.HTTP_200_OK
-        assert "model_record_id" not in response.json()["state"]["model_config"]
+        assert response.json()["state"] == {"agent_key": "build"}
         assert session_id not in _SESSION_RUNNERS
 
     async def test_agent_checkpoint_and_session_state_do_not_contain_api_key(
@@ -2929,7 +2961,7 @@ class TestAgentAPI:
         response = await client.get(f"/api/v1/agent/sessions/{session_id}")
 
         assert response.status_code == status.HTTP_200_OK
-        assert "api_key" not in response.json()["state"]["model_config"]
+        assert response.json()["state"] == {"agent_key": "build"}
 
     async def test_list_subagent_sessions_returns_only_active_state_rows(
         self,
@@ -3170,7 +3202,6 @@ class TestAgentAPI:
         assert data["messages"] == [
             {
                 "id": data["messages"][0]["id"],
-                "task_id": task_id,
                 "role": "user",
                 "agent_id": "primary",
                 "content": "请起草这一章",
@@ -3187,7 +3218,6 @@ class TestAgentAPI:
             },
             {
                 "id": f"{assistant_message.id}:text",
-                "task_id": task_id,
                 "role": "assistant",
                 "agent_id": "writer",
                 "content": "这是子 agent 的回复",

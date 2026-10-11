@@ -13,7 +13,7 @@ import {
 } from "@radix-ui/themes";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, Check, Component, FileUp, Plus, ShieldCheck, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useFieldArray, useForm, Controller, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
@@ -23,7 +23,7 @@ import type { ModelProvider, ModelProviderCatalogProvider } from "@/lib/model.ty
 
 import { fetchModelProviderCatalogModels, validateProvider } from "../lib/model-api";
 import { ProviderIcon } from "../lib/provider-icons";
-import { getProviderUrl, isCustomProviderType } from "../lib/provider-utils";
+import { getProviderUrl, isCustomProviderType, OPENAI_ICON_PATH } from "../lib/provider-utils";
 
 import "./connection-form-dialog.css";
 
@@ -117,6 +117,9 @@ interface ConnectionFormDialogProps {
   onSubmit: (data: FormData) => Promise<void>;
   isSubmitting: boolean;
   isAgentSettingsLocked: boolean;
+  oauthContent?: ReactNode;
+  isOAuthAuthenticating?: boolean;
+  defaultProviderType?: string;
 }
 
 export function ConnectionFormDialog({
@@ -128,6 +131,9 @@ export function ConnectionFormDialog({
   onSubmit,
   isSubmitting,
   isAgentSettingsLocked,
+  oauthContent,
+  isOAuthAuthenticating = false,
+  defaultProviderType = "",
 }: ConnectionFormDialogProps) {
   const { t } = useTranslation();
   const isEditing = !!connection;
@@ -168,7 +174,7 @@ export function ConnectionFormDialog({
       name: "",
       url: "",
       apiKey: "",
-      providerType: "",
+      providerType: defaultProviderType || "",
       customHeaders: [],
       projectId: "",
       location: "us-central1",
@@ -177,7 +183,7 @@ export function ConnectionFormDialog({
       credentialsAction: "replace",
       testModelId: "gemini-2.5-flash",
     };
-  }, [connection]);
+  }, [connection, defaultProviderType]);
 
   const {
     control,
@@ -201,6 +207,7 @@ export function ConnectionFormDialog({
   });
 
   const providerType = useWatch({ control, name: "providerType" });
+  const isOAuthProvider = providerType === "openai-codex";
   const url = useWatch({ control, name: "url" });
   const apiKey = useWatch({ control, name: "apiKey" });
   const projectId = useWatch({ control, name: "projectId" });
@@ -230,22 +237,28 @@ export function ConnectionFormDialog({
     () => catalogProviders?.find((provider) => provider.providerType === providerType),
     [catalogProviders, providerType],
   );
-  const providerIconPath = selectedCatalogProvider?.iconPath || connection?.iconPath;
+  const providerIconPath =
+    selectedCatalogProvider?.iconPath ||
+    connection?.iconPath ||
+    (isOAuthProvider
+      ? (catalogProviders?.find((provider) => provider.providerType === "openai")?.iconPath ??
+        OPENAI_ICON_PATH)
+      : null);
 
   // 切换到非 Vertex 且需要用户提供地址的提供商时，只清空一次 URL
   useEffect(() => {
-    if (!providerType || isVertex) return;
+    if (!providerType || isVertex || isOAuthProvider) return;
 
     if (requiresProviderUrl(providerType, catalogProviders)) {
       if (!isEditing || connection?.providerType !== providerType) {
         setValue("url", "");
       }
     }
-  }, [providerType, isVertex, catalogProviders, setValue, isEditing, connection]);
+  }, [providerType, isVertex, isOAuthProvider, catalogProviders, setValue, isEditing, connection]);
 
   // 当非 Vertex 提供商类型改变时，自动设置固定 URL
   useEffect(() => {
-    if (!providerType || isVertex || requiresProviderUrl(providerType, catalogProviders)) {
+    if (!providerType || isVertex || isOAuthProvider || requiresProviderUrl(providerType, catalogProviders)) {
       return;
     }
 
@@ -264,7 +277,7 @@ export function ConnectionFormDialog({
         }
       }
     }
-  }, [providerType, isVertex, setValue, isEditing, url, connection, catalogProviders]);
+  }, [providerType, isVertex, isOAuthProvider, setValue, isEditing, url, connection, catalogProviders]);
 
   // 当切换到 Vertex 时，补充默认建议区域及测试模型
   useEffect(() => {
@@ -391,7 +404,7 @@ export function ConnectionFormDialog({
   const handleValidate = useCallback(async () => {
     const formData = getValues();
 
-    if (!formData.providerType) {
+    if (!formData.providerType || formData.providerType === "openai-codex") {
       return;
     }
 
@@ -514,6 +527,8 @@ export function ConnectionFormDialog({
   // 提交表单
   const onFormSubmit = useCallback(
     async (data: ConnectionFormData) => {
+      if (data.providerType === "openai-codex") return;
+
       // Vertex 连接提交
       if (data.providerType === VERTEX_PROVIDER_TYPE) {
         if (!data.projectId?.trim() || !data.location?.trim()) {
@@ -623,7 +638,7 @@ export function ConnectionFormDialog({
   );
 
   const canValidate = useMemo(() => {
-    if (!providerType) return false;
+    if (!providerType || isOAuthProvider) return false;
     if (isVertex) {
       if (!projectId || !projectId.trim()) return false;
       if (!location || !location.trim()) return false;
@@ -646,6 +661,7 @@ export function ConnectionFormDialog({
     return true;
   }, [
     providerType,
+    isOAuthProvider,
     isVertex,
     projectId,
     location,
@@ -661,7 +677,7 @@ export function ConnectionFormDialog({
   ]);
 
   const canSubmit = useMemo(() => {
-    if (isAgentSettingsLocked || isSubmitting) return false;
+    if (isAgentSettingsLocked || isSubmitting || isOAuthProvider) return false;
     if (isVertex) {
       if (!projectId || !projectId.trim()) return false;
       if (!location || !location.trim()) return false;
@@ -683,6 +699,7 @@ export function ConnectionFormDialog({
   }, [
     isAgentSettingsLocked,
     isSubmitting,
+    isOAuthProvider,
     isVertex,
     projectId,
     location,
@@ -734,7 +751,7 @@ export function ConnectionFormDialog({
                     iconPath={providerIconPath}
                     size={40}
                   />
-                ) : isCustomProviderType(providerType) ? (
+                ) : isCustomProviderType(providerType) || isOAuthProvider ? (
                   <Component
                     size={40}
                     aria-hidden="true"
@@ -749,29 +766,31 @@ export function ConnectionFormDialog({
                 style={{ flex: 1 }}
               >
                 {/* 备注名称 */}
-                <Flex
-                  direction="column"
-                  gap="2"
-                >
-                  <Text
-                    size="2"
-                    weight="medium"
-                    color="gray"
+                {!isOAuthProvider && (
+                  <Flex
+                    direction="column"
+                    gap="2"
                   >
-                    {t("connections.name")}
-                  </Text>
-                  <Controller
-                    name="name"
-                    control={control}
-                    render={({ field }) => (
-                      <TextField.Root
-                        {...field}
-                        placeholder={t("connections.namePlaceholder")}
-                        disabled={isAgentSettingsLocked}
-                      />
-                    )}
-                  />
-                </Flex>
+                    <Text
+                      size="2"
+                      weight="medium"
+                      color="gray"
+                    >
+                      {t("connections.name")}
+                    </Text>
+                    <Controller
+                      name="name"
+                      control={control}
+                      render={({ field }) => (
+                        <TextField.Root
+                          {...field}
+                          placeholder={t("connections.namePlaceholder")}
+                          disabled={isAgentSettingsLocked}
+                        />
+                      )}
+                    />
+                  </Flex>
+                )}
 
                 {/* 提供商类型 */}
                 <Flex
@@ -800,7 +819,7 @@ export function ConnectionFormDialog({
                         onChange={field.onChange}
                         providers={catalogProviders ?? []}
                         placeholder={t("connections.providerTypePlaceholder")}
-                        disabled={isAgentSettingsLocked || isEditing}
+                        disabled={isAgentSettingsLocked || isEditing || isOAuthAuthenticating}
                       />
                     )}
                   />
@@ -823,6 +842,8 @@ export function ConnectionFormDialog({
                 </Flex>
               </Flex>
             </Flex>
+
+            {isOAuthProvider && oauthContent}
 
             {/* Anthropic on Vertex 尚未原生支持提示 */}
             {isVertexAnthropic && (
@@ -1321,74 +1342,76 @@ export function ConnectionFormDialog({
                 )}
 
                 {/* API Key */}
-                <Flex
-                  direction="column"
-                  gap="2"
-                >
-                  <Text
-                    size="2"
-                    weight="medium"
-                    color="gray"
+                {!isOAuthProvider && (
+                  <Flex
+                    direction="column"
+                    gap="2"
                   >
-                    {t("connections.apiKey")}
-                    {!isEditing && (
-                      <Text
-                        color="red"
-                        style={{ display: "inline" }}
-                      >
-                        {" "}
-                        *
-                      </Text>
-                    )}
-                  </Text>
-                  {isEditing ? (
-                    <Box>
-                      <TextField.Root
-                        value={apiKey || ""}
-                        onChange={(e) => {
-                          const form = getValues();
-                          reset({
-                            ...form,
-                            apiKey: e.target.value,
-                          });
-                        }}
-                        type="password"
-                        placeholder={
-                          apiKey ? t("connections.apiKeyPlaceholderEdit") : "••••••••••••••••"
-                        }
-                        disabled={isAgentSettingsLocked}
-                      />
-                      <Text
-                        size="1"
-                        color="gray"
-                        mt="1"
-                      >
-                        {t("connections.apiKeyEditHint")}
-                      </Text>
-                    </Box>
-                  ) : (
-                    <Controller
-                      name="apiKey"
-                      control={control}
-                      render={({ field }) => (
+                    <Text
+                      size="2"
+                      weight="medium"
+                      color="gray"
+                    >
+                      {t("connections.apiKey")}
+                      {!isEditing && (
+                        <Text
+                          color="red"
+                          style={{ display: "inline" }}
+                        >
+                          {" "}
+                          *
+                        </Text>
+                      )}
+                    </Text>
+                    {isEditing ? (
+                      <Box>
                         <TextField.Root
-                          {...field}
+                          value={apiKey || ""}
+                          onChange={(e) => {
+                            const form = getValues();
+                            reset({
+                              ...form,
+                              apiKey: e.target.value,
+                            });
+                          }}
                           type="password"
-                          placeholder={t("connections.apiKeyPlaceholder")}
+                          placeholder={
+                            apiKey ? t("connections.apiKeyPlaceholderEdit") : "••••••••••••••••"
+                          }
                           disabled={isAgentSettingsLocked}
                         />
-                      )}
-                    />
-                  )}
-                  {errors.apiKey && (
-                    <Text
-                      size="1"
-                      color="red"
-                    >
-                      {t(`connections.${errors.apiKey.message}`)}
-                    </Text>
-                  )}
-                </Flex>
+                        <Text
+                          size="1"
+                          color="gray"
+                          mt="1"
+                        >
+                          {t("connections.apiKeyEditHint")}
+                        </Text>
+                      </Box>
+                    ) : (
+                      <Controller
+                        name="apiKey"
+                        control={control}
+                        render={({ field }) => (
+                          <TextField.Root
+                            {...field}
+                            type="password"
+                            placeholder={t("connections.apiKeyPlaceholder")}
+                            disabled={isAgentSettingsLocked}
+                          />
+                        )}
+                      />
+                    )}
+                    {errors.apiKey && (
+                      <Text
+                        size="1"
+                        color="red"
+                      >
+                        {t(`connections.${errors.apiKey.message}`)}
+                      </Text>
+                    )}
+                  </Flex>
+                )}
 
                 {isCustomProviderType(providerType) && (
                   <Flex
@@ -1511,41 +1534,43 @@ export function ConnectionFormDialog({
             <Flex
               gap="3"
               mt="2"
-              justify="between"
+              justify={isOAuthProvider ? "end" : "between"}
             >
-              <Button
-                type="button"
-                variant="soft"
-                onClick={handleValidate}
-                disabled={
-                  isAgentSettingsLocked || !canValidate || validationStatus === "validating"
-                }
-                style={{
-                  backgroundColor:
-                    validationStatus === "success"
-                      ? "var(--green-a3)"
+              {!isOAuthProvider && (
+                <Button
+                  type="button"
+                  variant="soft"
+                  onClick={handleValidate}
+                  disabled={
+                    isAgentSettingsLocked || !canValidate || validationStatus === "validating"
+                  }
+                  style={{
+                    backgroundColor:
+                      validationStatus === "success"
+                        ? "var(--green-a3)"
+                        : validationStatus === "error"
+                          ? "var(--red-a3)"
+                          : undefined,
+                    color:
+                      validationStatus === "success"
+                        ? "var(--green-11)"
+                        : validationStatus === "error"
+                          ? "var(--red-11)"
+                          : undefined,
+                  }}
+                >
+                  {validationStatus === "validating" ? <Spinner size={18} /> : null}
+                  {validationStatus === "success" && <Check size={16} />}
+                  {validationStatus === "error" && <X size={16} />}
+                  {validationStatus === "validating"
+                    ? t("connections.validating")
+                    : validationStatus === "success"
+                      ? t("connections.validateSuccess")
                       : validationStatus === "error"
-                        ? "var(--red-a3)"
-                        : undefined,
-                  color:
-                    validationStatus === "success"
-                      ? "var(--green-11)"
-                      : validationStatus === "error"
-                        ? "var(--red-11)"
-                        : undefined,
-                }}
-              >
-                {validationStatus === "validating" ? <Spinner size={18} /> : null}
-                {validationStatus === "success" && <Check size={16} />}
-                {validationStatus === "error" && <X size={16} />}
-                {validationStatus === "validating"
-                  ? t("connections.validating")
-                  : validationStatus === "success"
-                    ? t("connections.validateSuccess")
-                    : validationStatus === "error"
-                      ? t("connections.validateFailed")
-                      : t("connections.validate")}
-              </Button>
+                        ? t("connections.validateFailed")
+                        : t("connections.validate")}
+                </Button>
+              )}
 
               <Flex gap="3">
                 <Dialog.Close>
@@ -1558,13 +1583,15 @@ export function ConnectionFormDialog({
                     {t("common.cancel")}
                   </Button>
                 </Dialog.Close>
-                <Button
-                  type="submit"
-                  disabled={!canSubmit}
-                >
-                  {isSubmitting ? <Spinner size={18} /> : null}
-                  {isEditing ? t("common.save") : t("common.create")}
-                </Button>
+                {!isOAuthProvider && (
+                  <Button
+                    type="submit"
+                    disabled={!canSubmit}
+                  >
+                    {isSubmitting ? <Spinner size={18} /> : null}
+                    {isEditing ? t("common.save") : t("common.create")}
+                  </Button>
+                )}
               </Flex>
             </Flex>
           </Flex>

@@ -38,6 +38,7 @@ from app.api.routers import (
     dashboard,
     health,
     import_router,
+    openai_codex,
     model_icons,
     model_provider_catalog,
     model_providers,
@@ -93,10 +94,17 @@ from app.models.catalog import ModelProviderCatalogService
 from app.maintenance import maintenance_state
 from app.settings import settings as app_settings
 from app.socket import init_socketio
-from app.storage.database import close_db, create_session, init_db, vacuum_database_if_needed
+from app.storage.database import (
+    close_db,
+    create_session,
+    init_db,
+    vacuum_database_if_needed,
+)
 from app.storage.repos import revision_repo, setting_repo
 from app.storage.services import task_service
-from app.storage.services.revision_content_backfill import backfill_revision_content_blobs
+from app.storage.services.revision_content_backfill import (
+    backfill_revision_content_blobs,
+)
 from app.storage.services.revision_service import cleanup_orphaned_revision_data
 
 
@@ -150,7 +158,9 @@ async def _reset_task_running_state() -> int:
 async def _reset_active_revision_state() -> int:
     session = await create_session()
     try:
-        recovered = await revision_repo.recover_active_revisions_for_stopped_tasks(session)
+        recovered = await revision_repo.recover_active_revisions_for_stopped_tasks(
+            session
+        )
         await session.commit()
         return recovered
     finally:
@@ -303,7 +313,9 @@ async def _run_startup_maintenance() -> None:
             )
             _migrate_started_at = None
         else:
-            logger.info("Checkpoint database already uses incremental auto-vacuum, skipping migration")
+            logger.info(
+                "Checkpoint database already uses incremental auto-vacuum, skipping migration"
+            )
 
         # 阶段 2：空页达到阈值才执行 VACUUM INTO 回收
         free_bytes, live_bytes = await checkpoint_free_page_bytes()
@@ -363,10 +375,7 @@ def _friendly_maintenance_error(exc: Exception) -> str:
     """将底层异常转换为对用户友好的维护失败说明。"""
     text = str(exc).lower()
     if "disk" in text or "space" in text or "full" in text:
-        return (
-            "磁盘空间不足，无法重整本地数据库。"
-            "请释放磁盘空间后重新启动应用重试。"
-        )
+        return "磁盘空间不足，无法重整本地数据库。请释放磁盘空间后重新启动应用重试。"
     return f"本地数据库维护失败：{exc}"
 
 
@@ -386,7 +395,9 @@ async def _cleanup_chapter_export_files() -> None:
     try:
         deleted_files = await cleanup_chapter_export_files(session)
         if deleted_files:
-            logger.info(f"Deleted {deleted_files} expired or unreachable chapter export files")
+            logger.info(
+                f"Deleted {deleted_files} expired or unreachable chapter export files"
+            )
     finally:
         await session.close()
 
@@ -397,7 +408,9 @@ async def _cleanup_orphaned_agent_attachment_files() -> None:
         deleted_files = await cleanup_orphaned_agent_attachment_files(session)
         await session.commit()
         if deleted_files:
-            logger.info(f"Deleted {deleted_files} orphaned agent attachment files at startup")
+            logger.info(
+                f"Deleted {deleted_files} orphaned agent attachment files at startup"
+            )
     finally:
         await session.close()
 
@@ -524,7 +537,9 @@ def _list_network_ipv4_addresses() -> list[str]:
 
     try:
         hostname = socket.gethostname()
-        for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None, family=socket.AF_INET):
+        for family, _, _, _, sockaddr in socket.getaddrinfo(
+            hostname, None, family=socket.AF_INET
+        ):
             if family != socket.AF_INET:
                 continue
             ip = sockaddr[0]
@@ -547,7 +562,9 @@ def _build_access_urls(host: str, port: int) -> list[tuple[str, str]]:
 
     if host == "0.0.0.0":
         urls: list[tuple[str, str]] = [("Local", f"http://127.0.0.1:{port}")]
-        urls.extend(("Network", f"http://{ip}:{port}") for ip in _list_network_ipv4_addresses())
+        urls.extend(
+            ("Network", f"http://{ip}:{port}") for ip in _list_network_ipv4_addresses()
+        )
         return urls
 
     return [("Network", f"http://{host}:{port}")]
@@ -599,7 +616,9 @@ def _style_access_line(line: str, supports_ansi: bool) -> str:
     return f"{ANSI_BOLD}{prefix}: {ANSI_BLUE}{url}{ANSI_RESET}"
 
 
-def _format_banner_lines(version: str, host: str, port: int, supports_ansi: bool) -> list[str]:
+def _format_banner_lines(
+    version: str, host: str, port: int, supports_ansi: bool
+) -> list[str]:
     return [
         "",
         " ██████╗ ██████╗ ███████╗███╗   ██╗███████╗██╗ ██████╗",
@@ -613,7 +632,10 @@ def _format_banner_lines(version: str, host: str, port: int, supports_ansi: bool
         "",
         _style_link_line("https://github.com/syrizelink/OpenFic", supports_ansi),
         "",
-        *[_style_access_line(line, supports_ansi) for line in _format_access_url_lines(host, port)],
+        *[
+            _style_access_line(line, supports_ansi)
+            for line in _format_access_url_lines(host, port)
+        ],
         "",
     ]
 
@@ -699,6 +721,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-OAuth-Revocation-Confirmed"],
     )
     app.add_middleware(AccessLogMiddleware)
 
@@ -716,6 +739,7 @@ def create_app() -> FastAPI:
     app.include_router(world_info_entries.router, prefix=app_settings.api_v1_prefix)
     app.include_router(settings.router, prefix=app_settings.api_v1_prefix)
     app.include_router(import_router.router, prefix=app_settings.api_v1_prefix)
+    app.include_router(openai_codex.router, prefix=app_settings.api_v1_prefix)
     app.include_router(model_providers.router, prefix=app_settings.api_v1_prefix)
     app.include_router(model_provider_catalog.router, prefix=app_settings.api_v1_prefix)
     app.include_router(models.router, prefix=app_settings.api_v1_prefix)

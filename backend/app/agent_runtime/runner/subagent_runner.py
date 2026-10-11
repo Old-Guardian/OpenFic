@@ -6,9 +6,11 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langgraph.types import Command
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langgraph.types import Command, Overwrite
 from loguru import logger
+from sqlalchemy import select
+from sqlmodel import col
 
 from app.agent_runtime.agents.definitions import (
     AgentDefinition,
@@ -24,10 +26,12 @@ from app.agent_runtime.agents.model_policy import (
 from app.audit import AuditContext
 from app.agent_runtime.agents.tool_categories import get_tool_names_for_categories
 from app.agent_runtime.context.helpers import extract_referenced_skill_ids
+from app.agent_runtime.context.pruning import OLD_TOOL_OUTPUT_PLACEHOLDER
 from app.agent_runtime.graph.llm_invoke import format_error_message
 from app.agent_runtime.graph.react_agent import create_react_agent
 from app.agent_runtime.model_config import to_client_model_config
-from app.agent_runtime.persistence import MessagePersister
+from app.agent_runtime.persistence import MessagePersister, repo
+from app.agent_runtime.persistence.types import PersistedMessage
 from app.agent_runtime.persistence.child_runs import (
     claim_next_child_run_request,
     complete_child_run_request,
@@ -39,7 +43,10 @@ from app.agent_runtime.persistence.child_runs import (
 )
 from app.agent_runtime.persistence.loader import load_history
 from app.agent_runtime.persistence.model import AgentChildRun, AgentChildRunRequest
-from app.agent_runtime.runner.checkpointer import get_checkpointer, prune_thread_checkpoints
+from app.agent_runtime.runner.checkpointer import (
+    get_checkpointer,
+    prune_thread_checkpoints,
+)
 from app.agent_runtime.runner.event_translator import EventTranslator
 from app.agent_runtime.runner.event_scope import SUBAGENT_CHILD_EVENT_TAG
 from app.agent_runtime.runner.run_registry import get_agent_run_registry
@@ -67,6 +74,7 @@ from app.core.encryption import EncryptionService
 from app.models.clients.model_factory import ModelConfig, create_chat_model
 from app.models.repos import model_provider_repo, model_repo
 from app.models.services.model_provider_service import ModelProviderService
+from app.models.services.openai_codex_service import OPENAI_CODEX_PROVIDER_TYPE
 from app.models.vertex_config import VERTEX_PROVIDER_TYPE
 from app.socket import emit
 from app.socket.handlers import (
@@ -87,8 +95,78 @@ _SUBAGENT_RESTRICTED_TOOL_NAMES = frozenset(
 )
 
 
-def build_child_messages(history: list[BaseMessage], *, content: str) -> list[BaseMessage]:
+def build_child_messages(
+    history: list[BaseMessage], *, content: str, request_seq: int | None = None
+) -> list[BaseMessage]:
+    if request_seq is not None and any(
+        message.response_metadata.get("openfic_seq") == request_seq
+        for message in history
+    ):
+        return history
     return [*history, HumanMessage(content=content)]
+
+
+def _annotate_child_history(
+    messages: list[dict], persisted: list[PersistedMessage]
+) -> None:
+    """Add persisted sequence numbers without replacing graph messages or bodies."""
+    lower_bound = -1
+    for message in messages:
+        metadata = message.setdefault("metadata", {})
+        if type(metadata.get("seq")) is int:
+            lower_bound = max(lower_bound, metadata["seq"])
+            continue
+        candidates = (
+            sorted(
+                persisted,
+                key=lambda row: (row.status != "aborted", row.seq),
+                reverse=True,
+            )
+            if message.get("role") == "tool"
+            else persisted
+        )
+        for row in candidates:
+            if row.role != message.get("role"):
+                continue
+            if row.role != "tool" and row.seq <= lower_bound:
+                continue
+            if row.llm_visibility != "visible" or row.message_type not in {
+                "message",
+                "user_request",
+            }:
+                continue
+            if row.status == "pending":
+                continue
+            if row.role == "tool":
+                matches = (
+                    bool(row.tool_call_id)
+                    and row.tool_call_id == message.get("tool_call_id")
+                )
+            elif row.role == "assistant" and message.get("tool_calls"):
+                matches = [call.get("id") for call in row.tool_calls or []] == [
+                    call.get("id") for call in message["tool_calls"]
+                ]
+            else:
+                matches = row.content == message.get("content")
+            if matches:
+                metadata["seq"] = row.seq
+                lower_bound = max(lower_bound, row.seq)
+                break
+
+
+async def _pending_child_message_ids(session: Any, child_thread_id: str) -> set[str]:
+    result = await session.execute(
+        select(col(AgentChildRunRequest.child_user_message_id))
+        .join(
+            AgentChildRun,
+            col(AgentChildRun.id) == col(AgentChildRunRequest.child_run_id),
+        )
+        .where(
+            col(AgentChildRun.child_thread_id) == child_thread_id,
+            col(AgentChildRunRequest.status) == "pending",
+        )
+    )
+    return {message_id for message_id in result.scalars().all() if message_id}
 
 
 def _get_referenced_skill_ids(runtime_state: dict[str, Any]) -> tuple[str, ...]:
@@ -161,10 +239,9 @@ async def _resolve_model_record_id(
     parent model config).
     """
     if configured_model_id == SYSTEM_LIGHT_MODEL_REFERENCE:
-        return (
-            await _read_setting_model_id(session, "light_model")
-            or await _read_setting_model_id(session, "default_model")
-        )
+        return await _read_setting_model_id(
+            session, "light_model"
+        ) or await _read_setting_model_id(session, "default_model")
 
     if configured_model_id in (None, "", SYSTEM_DEFAULT_MODEL_REFERENCE):
         return await _read_setting_model_id(session, "default_model")
@@ -172,7 +249,9 @@ async def _resolve_model_record_id(
     return configured_model_id
 
 
-async def _build_model_config_from_record(session: Any, record_id: str) -> dict[str, Any] | None:
+async def _build_model_config_from_record(
+    session: Any, record_id: str
+) -> dict[str, Any] | None:
     """Resolve a model record nanoid to a full model config dict.
 
     Mirrors the parent agent and background-job resolution: load the model +
@@ -219,13 +298,22 @@ async def _build_model_config_from_record(session: Any, record_id: str) -> dict[
             "vertex_connection": vertex_connection,
         }
 
-    api_key = encryption_service.decrypt(provider.api_key_encrypted)
+    api_key = (
+        ""
+        if provider.provider_type == OPENAI_CODEX_PROVIDER_TYPE
+        else encryption_service.decrypt(provider.api_key_encrypted)
+    )
     custom_headers = provider_service.get_decrypted_custom_headers(provider)
     return {
         "provider_type": provider.provider_type,
         "base_url": provider.url,
         "api_key": api_key,
         "model_id": model.model_id,
+        **(
+            {"provider_id": provider.id}
+            if provider.provider_type == OPENAI_CODEX_PROVIDER_TYPE
+            else {}
+        ),
         **({"custom_headers": custom_headers} if custom_headers else {}),
         "max_context_tokens": model.context_length,
         "input_price": getattr(model, "input_price", 0.0),
@@ -368,12 +456,29 @@ class SubagentRunner:
         finally:
             await _close_session(session)
 
-    async def _load_history(self, child_thread_id: str) -> list[BaseMessage]:
+    async def _load_history(
+        self,
+        child_thread_id: str,
+    ) -> list[BaseMessage]:
         session = await _open_session(self.session_factory)
         try:
-            return await load_history(session, child_thread_id)
+            history = await load_history(
+                session,
+                child_thread_id,
+                include_user_requests=True,
+                exclude_message_ids=await _pending_child_message_ids(
+                    session, child_thread_id
+                ),
+            )
         finally:
             await _close_session(session)
+        for message in history:
+            if (
+                isinstance(message, ToolMessage)
+                and message.response_metadata.get("openfic_pruned") is True
+            ):
+                message.content = OLD_TOOL_OUTPUT_PLACEHOLDER
+        return history
 
     async def _load_agent_definition(self, agent_key: str) -> AgentDefinition:
         session = await _open_session(self.session_factory)
@@ -391,7 +496,9 @@ class SubagentRunner:
             raise ValueError(f"agent is not an enabled subagent: {definition.key}")
         names = [
             name
-            for name in get_tool_names_for_categories(definition.enabled_tool_categories)
+            for name in get_tool_names_for_categories(
+                definition.enabled_tool_categories
+            )
             if name not in _SUBAGENT_RESTRICTED_TOOL_NAMES
         ]
         session = await _open_session(self.session_factory)
@@ -480,7 +587,9 @@ class SubagentRunner:
             termination=TerminationCondition(mode="no_tool_call"),
         )
         client_model_config = to_client_model_config(model_config)
-        session_id = runtime_state.get("session_id") or getattr(row, "child_thread_id", None)
+        session_id = runtime_state.get("session_id") or getattr(
+            row, "child_thread_id", None
+        )
         if session_id:
             client_model_config["session_id"] = session_id
         model = create_chat_model(ModelConfig(**client_model_config))
@@ -529,6 +638,16 @@ class SubagentRunner:
             normalized["parent_session_id"] = row.parent_session_id
             await self._persist_parent_task_usage_and_emit_delta(row, normalized)
 
+        async def history_seq_resolver(messages: list[dict]) -> None:
+            pending_ids = await _pending_child_message_ids(
+                runtime_session, row.child_thread_id
+            )
+            persisted = await repo.list_by_session(runtime_session, row.child_thread_id)
+            _annotate_child_history(
+                messages,
+                [message for message in persisted if message.id not in pending_ids],
+            )
+
         try:
             async for event in graph.astream_events(
                 graph_input,
@@ -544,6 +663,8 @@ class SubagentRunner:
                         "agent_event_sink": agent_event_sink,
                         "retry_event_sink": retry_event_sink,
                         "compaction_usage_sink": compaction_usage_sink,
+                        "model_config": model_config,
+                        "history_seq_resolver": history_seq_resolver,
                     },
                 },
                 version="v2",
@@ -570,7 +691,11 @@ class SubagentRunner:
                             payload,
                         )
                 await persister.handle(event)
-                if event.get("event") in {"on_chat_model_end", "on_tool_end", "on_tool_error"}:
+                if event.get("event") in {
+                    "on_chat_model_end",
+                    "on_tool_end",
+                    "on_tool_error",
+                }:
                     await self._clear_child_replay_run(
                         row.child_thread_id,
                         event.get("run_id"),
@@ -580,7 +705,9 @@ class SubagentRunner:
                     if isinstance(output, dict):
                         final_state = output
             await persister.finalize(reason="done")
-            snapshot_state = await self._load_child_graph_state(graph, row.child_thread_id)
+            snapshot_state = await self._load_child_graph_state(
+                graph, row.child_thread_id
+            )
             if snapshot_state is not None:
                 final_state = snapshot_state
             if final_state is None:
@@ -643,7 +770,9 @@ class SubagentRunner:
             return None
 
         state = await aget_state({"configurable": {"thread_id": child_thread_id}})
-        values = state.values if isinstance(getattr(state, "values", None), dict) else {}
+        values = (
+            state.values if isinstance(getattr(state, "values", None), dict) else {}
+        )
         if not isinstance(values, dict) or not values:
             return None
 
@@ -740,7 +869,14 @@ class SubagentRunner:
         *,
         model_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        active_model_config = model_config if model_config is not None else self.model_config
+        active_model_config = (
+            model_config if model_config is not None else self.model_config
+        )
+        billing_config = (
+            event_data["billing_config"]
+            if event_data.get("usage_kind") == "compaction"
+            else active_model_config
+        )
         usage = event_data.get("usage") if isinstance(event_data, dict) else None
         usage_dict = usage if isinstance(usage, dict) else {}
         token_input = int(
@@ -762,14 +898,15 @@ class SubagentRunner:
         if token_cache_write == 0:
             token_cache_write = max(int(usage_dict.get("token_cache_write") or 0), 0)
         call_cost = calculate_llm_call_cost(
+            provider_type=str(billing_config.get("provider_type") or ""),
             token_input=token_input,
             token_output=token_output,
             token_cache=token_cache,
             token_cache_write=token_cache_write,
-            input_price=float(active_model_config.get("input_price") or 0),
-            output_price=float(active_model_config.get("output_price") or 0),
-            cache_read_price=float(active_model_config.get("cache_read_price") or 0),
-            cache_write_price=float(active_model_config.get("cache_write_price") or 0),
+            input_price=float(billing_config.get("input_price") or 0),
+            output_price=float(billing_config.get("output_price") or 0),
+            cache_read_price=float(billing_config.get("cache_read_price") or 0),
+            cache_write_price=float(billing_config.get("cache_write_price") or 0),
         )
         return {
             "session_id": session_id,
@@ -845,7 +982,9 @@ class SubagentRunner:
                 room=agent_session_room(row.parent_session_id),
             )
 
-    async def _build_subagent_status_payload(self, row: AgentChildRun) -> dict[str, Any]:
+    async def _build_subagent_status_payload(
+        self, row: AgentChildRun
+    ) -> dict[str, Any]:
         pending_count = await self._count_pending_requests(row.id)
         payload = {
             "parent_session_id": row.parent_session_id,
@@ -1071,7 +1210,15 @@ class SubagentRunner:
         graph_input: Any
         if resume_payload is None:
             graph_input = {
-                "messages": build_child_messages(history, content=request_row.content),
+                # History is a complete snapshot; replace checkpoint messages
+                # instead of appending a second copy through the graph reducer.
+                "messages": Overwrite(
+                    build_child_messages(
+                        history,
+                        content=request_row.content,
+                        request_seq=request_row.child_user_message_seq,
+                    )
+                ),
                 "iteration_count": 0,
                 "is_done": False,
                 "final_output": None,
@@ -1145,14 +1292,18 @@ class SubagentRunner:
             "request_id": request_row.id,
         }
 
-    async def _claim_next_request(self, child_run_id: str) -> AgentChildRunRequest | None:
+    async def _claim_next_request(
+        self, child_run_id: str
+    ) -> AgentChildRunRequest | None:
         session = await _open_session(self.session_factory)
         try:
             return await claim_next_child_run_request(session, child_run_id)
         finally:
             await _close_session(session)
 
-    async def _load_running_request(self, child_run_id: str) -> AgentChildRunRequest | None:
+    async def _load_running_request(
+        self, child_run_id: str
+    ) -> AgentChildRunRequest | None:
         session = await _open_session(self.session_factory)
         try:
             return await get_running_child_run_request(

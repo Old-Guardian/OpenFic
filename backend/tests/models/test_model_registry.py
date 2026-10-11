@@ -21,6 +21,7 @@ _ANTHROPIC_COMPATIBLE_PROVIDER_TYPES = {
 def test_registry_lists_only_current_first_class_provider_types() -> None:
     assert set(AdapterRegistry.list_providers()) == {
         "openai",
+        "openai-codex",
         "anthropic",
         "google-genai",
         "google-vertex",
@@ -34,6 +35,7 @@ def test_registry_lists_only_current_first_class_provider_types() -> None:
         "amazon-nova",
         "deepseek",
         "openai-compatible",
+        "infistar",
         "openai-compatible-responses",
         "anthropic-compatible",
         "gemini-compatible",
@@ -46,3 +48,14 @@ def test_registry_uses_anthropic_compatible_adapter_for_anthropic_catalog_provid
         adapter = AdapterRegistry.get_adapter(provider_type)
 
         assert isinstance(adapter, AnthropicCompatibleAdapter)
+
+
+def test_model_service_package_exports_match_direct_imports() -> None:
+    from app.models import ModelProviderService, ModelService
+    from app.models.services import ModelProviderService as ExportedProviderService
+    from app.models.services import ModelService as ExportedModelService
+    from app.models.services.model_provider_service import ModelProviderService as DirectProviderService
+    from app.models.services.model_service import ModelService as DirectModelService
+
+    assert ModelProviderService is ExportedProviderService is DirectProviderService
+    assert ModelService is ExportedModelService is DirectModelService

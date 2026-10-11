@@ -70,6 +70,33 @@ async def test_load_history_basic_roles_in_seq_order(
 
 
 @pytest.mark.asyncio
+async def test_load_history_includes_visible_child_user_requests(
+    db_session: AsyncSession,
+    sample_task,
+):
+    await repo.insert_message(
+        db_session,
+        session_id="child-session",
+        task_id=sample_task.id,
+        project_id=sample_task.project_id,
+        role="user",
+        content="child prompt",
+        status="sent",
+        message_type="user_request",
+    )
+
+    assert await load_history(db_session, "child-session") == []
+    messages = await load_history(
+        db_session, "child-session", include_user_requests=True
+    )
+
+    assert len(messages) == 1
+    assert isinstance(messages[0], HumanMessage)
+    assert messages[0].content == "child prompt"
+    assert messages[0].response_metadata["openfic_seq"] == 0
+
+
+@pytest.mark.asyncio
 async def test_load_history_preserves_user_attachment_metadata(
     db_session: AsyncSession,
     sample_task,
@@ -714,6 +741,10 @@ async def test_load_history_reasoning_only_on_latest_assistant(
     db_session: AsyncSession, sample_task
 ):
     sid = "session_a"
+    first_output = [{"type": "reasoning", "id": "rs_first", "summary": [],
+                     "encrypted_content": "encrypted-first"}]
+    second_output = [{"type": "reasoning", "id": "rs_second", "summary": [],
+                      "encrypted_content": "encrypted-second"}]
     await repo.insert_message(
         db_session,
         session_id=sid,
@@ -723,6 +754,7 @@ async def test_load_history_reasoning_only_on_latest_assistant(
         content="first",
         reasoning="thinking-1",
         status="complete",
+        metadata={"responses_output": first_output},
     )
     await repo.insert_message(
         db_session,
@@ -733,11 +765,14 @@ async def test_load_history_reasoning_only_on_latest_assistant(
         content="second",
         reasoning="thinking-2",
         status="complete",
+        metadata={"responses_output": second_output},
     )
     msgs = await load_history(db_session, sid)
     assert len(msgs) == 2
     assert "reasoning_content" not in msgs[0].additional_kwargs
     assert msgs[1].additional_kwargs["reasoning_content"] == "thinking-2"
+    assert msgs[0].additional_kwargs["responses_output"] == first_output
+    assert msgs[1].additional_kwargs["responses_output"] == second_output
 
 
 @pytest.mark.asyncio
@@ -754,6 +789,8 @@ async def test_load_history_partial_assistant_and_aborted_tool_kept(
         content="half",
         status="partial",
         tool_calls=[{"id": "c1", "name": "n", "args": {}}],
+        metadata={"responses_output": [{"type": "reasoning", "id": "rs_partial",
+                                        "summary": [], "encrypted_content": "unfinished"}]},
     )
     await repo.insert_message(
         db_session,
@@ -769,6 +806,7 @@ async def test_load_history_partial_assistant_and_aborted_tool_kept(
     msgs = await load_history(db_session, sid)
     assert len(msgs) == 2
     assert isinstance(msgs[0], AIMessage) and msgs[0].content == "half"
+    assert "responses_output" not in msgs[0].additional_kwargs
     assert len(msgs[0].tool_calls) == 1
     tc0 = msgs[0].tool_calls[0]
     assert tc0["id"] == "c1"

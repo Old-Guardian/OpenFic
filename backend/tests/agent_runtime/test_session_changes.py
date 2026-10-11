@@ -190,6 +190,39 @@ def test_includes_subagent_changes_in_parent_turn_and_session_summary():
     assert any(item.child_run_id == "child-1" for item in result.session_changes.items)
 
 
+def test_summary_projection_skips_diff_sections():
+    result = build_agent_changes(
+        "parent-session",
+        parent_messages=[
+            _message(
+                message_id="user-1",
+                session_id="parent-session",
+                role="user",
+                seq=0,
+                metadata={"revision_id": "revision-1"},
+            ),
+            _message(
+                message_id="tool-1",
+                session_id="parent-session",
+                role="tool",
+                seq=1,
+                content=_chapter_result("chapter-1", "新增正文"),
+                tool_name="edit_chapter",
+                tool_call_id="tool-call-1",
+            ),
+        ],
+        child_runs=[],
+        child_requests=[],
+        child_messages=[],
+        revisions=[_revision("revision-1", "user-1", 0)],
+        include_details=False,
+    )
+
+    item = result.session_changes.items[0]
+    assert item.sections == []
+    assert "sections" not in result.to_payload(include_details=False)["session_changes"]["items"][0]
+
+
 def test_assigns_reused_subagent_requests_to_their_parent_turns():
     child_run = _child_run()
     result = build_agent_changes(
@@ -843,6 +876,60 @@ def test_keeps_executed_changes_from_cancelled_revision():
 
 
 @pytest.mark.asyncio
+async def test_loads_only_requested_revision_range(
+    session,
+):
+    session.add_all(
+        [
+            _message(
+                message_id="user-1",
+                session_id="parent-session",
+                role="user",
+                seq=0,
+                metadata={"revision_id": "revision-1"},
+            ),
+            _message(
+                message_id="tool-1",
+                session_id="parent-session",
+                role="tool",
+                seq=1,
+                content=_chapter_result("chapter-1", "第一轮"),
+                tool_name="edit_chapter",
+                tool_call_id="tool-call-1",
+            ),
+            _message(
+                message_id="user-2",
+                session_id="parent-session",
+                role="user",
+                seq=2,
+                metadata={"revision_id": "revision-2"},
+            ),
+            _message(
+                message_id="tool-2",
+                session_id="parent-session",
+                role="tool",
+                seq=3,
+                content=_chapter_result("chapter-2", "第二轮"),
+                tool_name="edit_chapter",
+                tool_call_id="tool-call-2",
+            ),
+            _revision("revision-1", "user-1", 0),
+            _revision("revision-2", "user-2", 2),
+        ]
+    )
+    await session.flush()
+
+    result = await load_agent_session_changes(
+        session,
+        "parent-session",
+        revision_id="revision-1",
+    )
+
+    assert [turn.revision_id for turn in result.turns] == ["revision-1"]
+    assert [item.key for item in result.session_changes.items] == ["chapter:chapter-1"]
+
+
+@pytest.mark.asyncio
 async def test_loads_parent_and_descendant_messages_before_projecting_changes():
     child_run = _child_run()
     parent_messages = [
@@ -873,28 +960,22 @@ async def test_loads_parent_and_descendant_messages_before_projecting_changes():
         revision_id="revision-1",
     )
     execute_results = [
-        SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [child_request])),
         SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [_revision("revision-1", "user-1", 0)])),
+        SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [child_request])),
     ]
     db_session = SimpleNamespace(execute=AsyncMock(side_effect=execute_results))
 
-    async def list_messages(_session, session_id: str):
-        return parent_messages if session_id == "parent-session" else child_messages
-
-    async def list_children(_session, session_ids: list[str]):
-        return [child_run] if "parent-session" in session_ids else []
+    async def list_children(_session, session_id: str, parent_revision_id=None):
+        return [child_run] if session_id == "parent-session" else []
 
     with patch(
-        "app.agent_runtime.session_changes.message_repo.list_by_session",
-        side_effect=list_messages,
-    ), patch(
         "app.agent_runtime.session_changes.message_repo.list_by_sessions",
         return_value={
             "parent-session": parent_messages,
             "thread-child-1": child_messages,
         },
     ) as list_messages_batch, patch(
-        "app.agent_runtime.session_changes.list_child_runs_for_parents",
+        "app.agent_runtime.session_changes.list_descendant_child_runs",
         side_effect=list_children,
     ) as list_children_batch:
         result = await load_agent_session_changes(db_session, "parent-session")
@@ -902,4 +983,526 @@ async def test_loads_parent_and_descendant_messages_before_projecting_changes():
     assert result.session_changes.item_count == 1
     assert result.turns[0].subagent_runs[0].child_run_id == "child-1"
     assert list_messages_batch.call_count == 1
-    assert list_children_batch.call_count == 2
+    list_children_batch.assert_awaited_once_with(db_session, "parent-session", parent_revision_id=None)
+
+
+def test_net_diff_consistency_a_to_b_to_c():
+    """Verify A -> B -> C yields net +1/-1 in both detailed and summary projections."""
+    def _update_payload(before_text: str, after_text: str) -> str:
+        return json.dumps(
+            {
+                "success": True,
+                "metadata": {
+                    "chapter_diff": {
+                        "operation": "update",
+                        "chapter_id": "chapter-1",
+                        "chapter_title": "章节",
+                        "sections": [
+                            {
+                                "type": "content",
+                                "lines": [
+                                    {
+                                        "type": "removed",
+                                        "before_line_number": 1,
+                                        "after_line_number": None,
+                                        "text": before_text,
+                                    },
+                                    {
+                                        "type": "added",
+                                        "before_line_number": None,
+                                        "after_line_number": 1,
+                                        "text": after_text,
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                },
+            },
+            ensure_ascii=False,
+        )
+
+    messages = [
+        _message(
+            message_id="user-1",
+            session_id="parent-session",
+            role="user",
+            seq=0,
+            metadata={"revision_id": "revision-1"},
+        ),
+        _message(
+            message_id="tool-1",
+            session_id="parent-session",
+            role="tool",
+            seq=1,
+            content=_update_payload("A", "B"),
+            tool_name="edit_chapter",
+            tool_call_id="call-1",
+        ),
+        _message(
+            message_id="tool-2",
+            session_id="parent-session",
+            role="tool",
+            seq=2,
+            content=_update_payload("B", "C"),
+            tool_name="edit_chapter",
+            tool_call_id="call-2",
+        ),
+    ]
+
+    detailed = build_agent_changes(
+        "parent-session",
+        parent_messages=messages,
+        child_runs=[],
+        child_requests=[],
+        child_messages=[],
+        revisions=[_revision("revision-1", "user-1", 0)],
+        include_details=True,
+    )
+    summary = build_agent_changes(
+        "parent-session",
+        parent_messages=messages,
+        child_runs=[],
+        child_requests=[],
+        child_messages=[],
+        revisions=[_revision("revision-1", "user-1", 0)],
+        include_details=False,
+    )
+
+    detailed_item = detailed.session_changes.items[0]
+    summary_item = summary.session_changes.items[0]
+
+    assert detailed_item.added == 1
+    assert detailed_item.removed == 1
+    assert len(detailed_item.sections) == 1
+    assert [line.text for line in detailed_item.sections[0].lines if line.type == "removed"] == ["A"]
+    assert [line.text for line in detailed_item.sections[0].lines if line.type == "added"] == ["C"]
+
+    # Summary mode MUST have the exact same net added/removed stats!
+    assert summary_item.added == 1
+    assert summary_item.removed == 1
+    assert summary_item.sections == []
+
+
+def test_net_diff_consistency_a_to_b_to_a():
+    """Verify A -> B -> A yields net 0 changes in both detailed and summary projections."""
+    def _update_payload(before_text: str, after_text: str) -> str:
+        return json.dumps(
+            {
+                "success": True,
+                "metadata": {
+                    "chapter_diff": {
+                        "operation": "update",
+                        "chapter_id": "chapter-1",
+                        "chapter_title": "章节",
+                        "sections": [
+                            {
+                                "type": "content",
+                                "lines": [
+                                    {
+                                        "type": "removed",
+                                        "before_line_number": 1,
+                                        "after_line_number": None,
+                                        "text": before_text,
+                                    },
+                                    {
+                                        "type": "added",
+                                        "before_line_number": None,
+                                        "after_line_number": 1,
+                                        "text": after_text,
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                },
+            },
+            ensure_ascii=False,
+        )
+
+    messages = [
+        _message(
+            message_id="user-1",
+            session_id="parent-session",
+            role="user",
+            seq=0,
+            metadata={"revision_id": "revision-1"},
+        ),
+        _message(
+            message_id="tool-1",
+            session_id="parent-session",
+            role="tool",
+            seq=1,
+            content=_update_payload("A", "B"),
+            tool_name="edit_chapter",
+            tool_call_id="call-1",
+        ),
+        _message(
+            message_id="tool-2",
+            session_id="parent-session",
+            role="tool",
+            seq=2,
+            content=_update_payload("B", "A"),
+            tool_name="edit_chapter",
+            tool_call_id="call-2",
+        ),
+    ]
+
+    detailed = build_agent_changes(
+        "parent-session",
+        parent_messages=messages,
+        child_runs=[],
+        child_requests=[],
+        child_messages=[],
+        revisions=[_revision("revision-1", "user-1", 0)],
+        include_details=True,
+    )
+    summary = build_agent_changes(
+        "parent-session",
+        parent_messages=messages,
+        child_runs=[],
+        child_requests=[],
+        child_messages=[],
+        revisions=[_revision("revision-1", "user-1", 0)],
+        include_details=False,
+    )
+
+    detailed_item = detailed.session_changes.items[0]
+    summary_item = summary.session_changes.items[0]
+
+    assert detailed_item.added == 0
+    assert detailed_item.removed == 0
+    assert detailed_item.sections == []
+
+    # Summary mode MUST have the exact same net added/removed stats!
+    assert summary_item.added == 0
+    assert summary_item.removed == 0
+    assert summary_item.sections == []
+
+
+def test_net_diff_consistency_create_then_modify():
+    """Verify create then modify maintains identical net added/removed stats."""
+    create_result = json.dumps(
+        {
+            "success": True,
+            "metadata": {
+                "chapter_diff": {
+                    "operation": "create",
+                    "chapter_id": "chapter-1",
+                    "chapter_title": "章节",
+                    "sections": [
+                        {
+                            "type": "content",
+                            "lines": [
+                                {"type": "added", "before_line_number": None, "after_line_number": 1, "text": "行1"},
+                                {"type": "added", "before_line_number": None, "after_line_number": 2, "text": "行2"},
+                                {"type": "added", "before_line_number": None, "after_line_number": 3, "text": "行3"},
+                            ],
+                        }
+                    ],
+                }
+            },
+        },
+        ensure_ascii=False,
+    )
+    modify_result = json.dumps(
+        {
+            "success": True,
+            "metadata": {
+                "chapter_diff": {
+                    "operation": "update",
+                    "chapter_id": "chapter-1",
+                    "chapter_title": "章节",
+                    "sections": [
+                        {
+                            "type": "content",
+                            "lines": [
+                                {"type": "removed", "before_line_number": 2, "after_line_number": None, "text": "行2"},
+                                {"type": "added", "before_line_number": None, "after_line_number": 2, "text": "修改后的行2"},
+                            ],
+                        }
+                    ],
+                }
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    messages = [
+        _message(
+            message_id="user-1",
+            session_id="parent-session",
+            role="user",
+            seq=0,
+            metadata={"revision_id": "revision-1"},
+        ),
+        _message(
+            message_id="tool-1",
+            session_id="parent-session",
+            role="tool",
+            seq=1,
+            content=create_result,
+            tool_name="write_chapter",
+            tool_call_id="call-1",
+        ),
+        _message(
+            message_id="tool-2",
+            session_id="parent-session",
+            role="tool",
+            seq=2,
+            content=modify_result,
+            tool_name="edit_chapter",
+            tool_call_id="call-2",
+        ),
+    ]
+
+    detailed = build_agent_changes(
+        "parent-session",
+        parent_messages=messages,
+        child_runs=[],
+        child_requests=[],
+        child_messages=[],
+        revisions=[_revision("revision-1", "user-1", 0)],
+        include_details=True,
+    )
+    summary = build_agent_changes(
+        "parent-session",
+        parent_messages=messages,
+        child_runs=[],
+        child_requests=[],
+        child_messages=[],
+        revisions=[_revision("revision-1", "user-1", 0)],
+        include_details=False,
+    )
+
+    detailed_item = detailed.session_changes.items[0]
+    summary_item = summary.session_changes.items[0]
+
+    assert detailed_item.operation == "create"
+    assert detailed_item.added == 3
+    assert detailed_item.removed == 0
+
+    assert summary_item.operation == "create"
+    assert summary_item.added == 3
+    assert summary_item.removed == 0
+    assert summary_item.sections == []
+
+
+def test_net_diff_consistency_create_then_delete():
+    """Verify create then delete yields 0 items in both detailed and summary projections."""
+    create_result = json.dumps(
+        {
+            "success": True,
+            "metadata": {
+                "chapter_diff": {
+                    "operation": "create",
+                    "chapter_id": "chapter-1",
+                    "chapter_title": "章节",
+                    "sections": [
+                        {
+                            "type": "content",
+                            "lines": [
+                                {"type": "added", "before_line_number": None, "after_line_number": 1, "text": "行1"},
+                                {"type": "added", "before_line_number": None, "after_line_number": 2, "text": "行2"},
+                            ],
+                        }
+                    ],
+                }
+            },
+        },
+        ensure_ascii=False,
+    )
+    delete_result = json.dumps(
+        {
+            "success": True,
+            "metadata": {
+                "chapter_diff": {
+                    "operation": "delete",
+                    "chapter_id": "chapter-1",
+                    "chapter_title": "章节",
+                    "sections": [],
+                }
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    messages = [
+        _message(
+            message_id="user-1",
+            session_id="parent-session",
+            role="user",
+            seq=0,
+            metadata={"revision_id": "revision-1"},
+        ),
+        _message(
+            message_id="tool-1",
+            session_id="parent-session",
+            role="tool",
+            seq=1,
+            content=create_result,
+            tool_name="write_chapter",
+            tool_call_id="call-1",
+        ),
+        _message(
+            message_id="tool-2",
+            session_id="parent-session",
+            role="tool",
+            seq=2,
+            content=delete_result,
+            tool_name="delete_chapter",
+            tool_call_id="call-2",
+        ),
+    ]
+
+    detailed = build_agent_changes(
+        "parent-session",
+        parent_messages=messages,
+        child_runs=[],
+        child_requests=[],
+        child_messages=[],
+        revisions=[_revision("revision-1", "user-1", 0)],
+        include_details=True,
+    )
+    summary = build_agent_changes(
+        "parent-session",
+        parent_messages=messages,
+        child_runs=[],
+        child_requests=[],
+        child_messages=[],
+        revisions=[_revision("revision-1", "user-1", 0)],
+        include_details=False,
+    )
+
+    assert detailed.session_changes.item_count == 0
+    assert summary.session_changes.item_count == 0
+
+
+def test_net_diff_consistency_cross_turn_and_subagent():
+    """Verify cross-turn parent and subagent modifications maintain identical net diff."""
+    def _update_payload(before_text: str, after_text: str) -> str:
+        return json.dumps(
+            {
+                "success": True,
+                "metadata": {
+                    "chapter_diff": {
+                        "operation": "update",
+                        "chapter_id": "chapter-1",
+                        "chapter_title": "章节",
+                        "sections": [
+                            {
+                                "type": "content",
+                                "lines": [
+                                    {
+                                        "type": "removed",
+                                        "before_line_number": 1,
+                                        "after_line_number": None,
+                                        "text": before_text,
+                                    },
+                                    {
+                                        "type": "added",
+                                        "before_line_number": None,
+                                        "after_line_number": 1,
+                                        "text": after_text,
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                },
+            },
+            ensure_ascii=False,
+        )
+
+    parent_messages = [
+        _message(
+            message_id="user-1",
+            session_id="parent-session",
+            role="user",
+            seq=0,
+            metadata={"revision_id": "revision-1"},
+        ),
+        _message(
+            message_id="parent-tool-1",
+            session_id="parent-session",
+            role="tool",
+            seq=1,
+            content=_update_payload("A", "B"),
+            tool_name="edit_chapter",
+            tool_call_id="parent-call-1",
+        ),
+        _message(
+            message_id="user-2",
+            session_id="parent-session",
+            role="user",
+            seq=2,
+            metadata={"revision_id": "revision-2"},
+        ),
+    ]
+
+    child_run = _child_run()
+    child_requests = [
+        _child_request(
+            "child-1",
+            request_id="request-1",
+            seq=0,
+            message_seq=0,
+            revision_id="revision-2",
+        )
+    ]
+    child_messages = [
+        _message(
+            message_id="child-tool-1",
+            session_id="thread-child-1",
+            role="tool",
+            seq=1,
+            content=_update_payload("B", "C"),
+            tool_name="edit_chapter",
+            tool_call_id="child-call-1",
+        )
+    ]
+
+    revisions = [
+        _revision("revision-1", "user-1", 0),
+        _revision("revision-2", "user-2", 2),
+    ]
+
+    detailed = build_agent_changes(
+        "parent-session",
+        parent_messages=parent_messages,
+        child_runs=[child_run],
+        child_requests=child_requests,
+        child_messages=child_messages,
+        revisions=revisions,
+        include_details=True,
+    )
+    summary = build_agent_changes(
+        "parent-session",
+        parent_messages=parent_messages,
+        child_runs=[child_run],
+        child_requests=child_requests,
+        child_messages=child_messages,
+        revisions=revisions,
+        include_details=False,
+    )
+
+    detailed_session_item = detailed.session_changes.items[0]
+    summary_session_item = summary.session_changes.items[0]
+
+    assert detailed_session_item.added == 1
+    assert detailed_session_item.removed == 1
+    assert summary_session_item.added == 1
+    assert summary_session_item.removed == 1
+    assert summary_session_item.sections == []
+
+    # Turn 1
+    assert detailed.turns[0].changes.items[0].added == 1
+    assert detailed.turns[0].changes.items[0].removed == 1
+    assert summary.turns[0].changes.items[0].added == 1
+    assert summary.turns[0].changes.items[0].removed == 1
+
+    # Turn 2
+    assert detailed.turns[1].subagent_runs[0].changes.items[0].added == 1
+    assert detailed.turns[1].subagent_runs[0].changes.items[0].removed == 1
+    assert summary.turns[1].subagent_runs[0].changes.items[0].added == 1
+    assert summary.turns[1].subagent_runs[0].changes.items[0].removed == 1

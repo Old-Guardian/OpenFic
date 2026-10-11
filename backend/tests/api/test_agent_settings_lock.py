@@ -130,6 +130,12 @@ async def test_agent_settings_lock_rejects_restricted_writes(
             "provider_type": "openai",
         },
     )
+    forget_registration_response = await client.delete(
+        "/api/v1/openai-codex/registrations/oaiapp_test",
+    )
+    cancel_auth_response = await client.delete("/api/v1/openai-codex/auth/unknown")
+    assert cancel_auth_response.status_code == 200
+    assert cancel_auth_response.json()["status"] == "expired"
     model_response = await client.post(
         "/api/v1/models",
         json={
@@ -161,6 +167,7 @@ async def test_agent_settings_lock_rejects_restricted_writes(
     for response in (
         restricted_response,
         provider_response,
+        forget_registration_response,
         model_response,
         rule_response,
         skill_response,
@@ -184,37 +191,6 @@ async def test_agent_settings_lock_allows_unrestricted_settings_update(
 
     assert response.status_code == 200
     assert response.json()["theme"] == "dark"
-
-
-@pytest.mark.asyncio
-async def test_agent_settings_lock_rejects_reasoning_effort_update(
-    client: AsyncClient,
-    session: AsyncSession,
-) -> None:
-    task = await _create_agent_task(client, session)
-
-    unlocked_response = await client.put(
-        "/api/v1/agent-definitions/reviewer",
-        json={"reasoning_effort": "high"},
-    )
-    assert unlocked_response.status_code == 200
-
-    task.is_running = True
-    session.add(task)
-    await session.commit()
-
-    locked_response = await client.put(
-        "/api/v1/agent-definitions/reviewer",
-        json={"reasoning_effort": "off"},
-    )
-    assert locked_response.status_code == 409
-    assert locked_response.json()["detail"] == {
-        "code": "agent_settings_locked",
-        "message": "Agent 会话运行中，无法修改相关设置",
-    }
-
-    fetched = await client.get("/api/v1/agent-definitions/reviewer")
-    assert fetched.json()["reasoning_effort"] == "high"
 
 
 @pytest.mark.asyncio

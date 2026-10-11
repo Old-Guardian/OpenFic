@@ -10,7 +10,10 @@ from typing import Literal
 from langgraph.errors import GraphInterrupt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent_runtime.content_blocks import extract_reasoning_content, extract_text_content
+from app.agent_runtime.content_blocks import (
+    extract_reasoning_content,
+    extract_text_content,
+)
 from app.agent_runtime.persistence import repo
 from app.agent_runtime.persistence.child_runs import (
     get_child_run_agent_number,
@@ -18,7 +21,10 @@ from app.agent_runtime.persistence.child_runs import (
     get_child_run_for_parent_tool_call,
 )
 from app.agent_runtime.persistence.errors import PersistenceWriteError
-from app.agent_runtime.runner.event_scope import is_subagent_child_event
+from app.agent_runtime.runner.event_scope import (
+    is_compaction_event,
+    is_subagent_child_event,
+)
 from app.agent_runtime.tools.errors import (
     ToolErrorCode,
     ToolFailure,
@@ -98,6 +104,8 @@ class MessagePersister:
         self._previewed_tool_runs: set[str] = set()
 
     async def handle(self, event: dict) -> None:
+        if is_compaction_event(event):
+            return
         if is_subagent_child_event(event) and not self._allow_subagent_child_events:
             return
 
@@ -150,7 +158,9 @@ class MessagePersister:
         if content:
             buf.content_parts.append(content)
 
-        reasoning = (getattr(chunk, "additional_kwargs", {}) or {}).get("reasoning_content")
+        reasoning = (getattr(chunk, "additional_kwargs", {}) or {}).get(
+            "reasoning_content"
+        )
         if not isinstance(reasoning, str) or not reasoning:
             reasoning = extract_reasoning_content(getattr(chunk, "content", None))
         if reasoning:
@@ -183,6 +193,17 @@ class MessagePersister:
             return
 
         output = event.get("data", {}).get("output")
+        additional_kwargs = getattr(output, "additional_kwargs", None)
+        responses_output = (
+            additional_kwargs.get("responses_output")
+            if isinstance(additional_kwargs, dict)
+            else None
+        )
+        metadata = (
+            {"responses_output": responses_output}
+            if isinstance(responses_output, list) and responses_output
+            else {}
+        )
         content = "".join(buf.content_parts) or self._extract_output_content(output)
         reasoning = "".join(buf.reasoning_parts) or self._extract_output_reasoning(
             output
@@ -192,7 +213,7 @@ class MessagePersister:
         if not tool_calls:
             tool_calls = self._extract_output_tool_calls(output, run_id=run_id)
 
-        if not content and not reasoning and not tool_calls:
+        if not content and not reasoning and not tool_calls and not metadata:
             return
 
         await self._write(
@@ -203,6 +224,7 @@ class MessagePersister:
             reasoning_duration_ms=reasoning_duration_ms,
             tool_calls=tool_calls or None,
             agent_id=buf.agent_id,
+            metadata=metadata,
         )
 
         for tool_call in tool_calls:
@@ -415,7 +437,9 @@ class MessagePersister:
         tool_call_id = payload.get("tool_call_id")
         tool_result_preview = payload.get("tool_result_preview")
         tool_name = payload.get("tool_name")
-        if payload.get("type") == "ask_user" and not isinstance(tool_result_preview, dict):
+        if payload.get("type") == "ask_user" and not isinstance(
+            tool_result_preview, dict
+        ):
             questions = payload.get("questions")
             if not isinstance(questions, list):
                 args = payload.get("args")

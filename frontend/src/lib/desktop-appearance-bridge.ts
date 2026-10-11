@@ -37,6 +37,7 @@ declare global {
       publishAppearance: (payload: DesktopAppearancePayload) => void;
       publishLanguage: (language: LanguageCode) => void;
       publishSocketDiagnostic: (payload: SocketDiagnosticPayload) => void;
+      openOpenAICodexAuthorization?: (url: string) => Promise<void>;
       onRequestClose?: (handler: () => void | Promise<void>) => () => void;
       respondCloseDecision?: (decision: CloseDecisionPayload) => void;
     };

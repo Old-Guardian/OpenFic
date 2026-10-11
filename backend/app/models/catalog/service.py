@@ -66,14 +66,31 @@ _PROVIDER_DEFINITIONS: tuple[_ProviderDefinition, ...] = (
     _ProviderDefinition("deepseek", "deepseek"),
 )
 
-_PROVIDER_BY_TYPE = {definition.provider_type: definition for definition in _PROVIDER_DEFINITIONS}
+_PROVIDER_BY_TYPE = {
+    definition.provider_type: definition for definition in _PROVIDER_DEFINITIONS
+}
 _PROVIDER_BY_MODELS_DEV_ID = {
-    definition.models_dev_provider_id: definition for definition in _PROVIDER_DEFINITIONS
+    definition.models_dev_provider_id: definition
+    for definition in _PROVIDER_DEFINITIONS
 }
 _REGISTERED_PROVIDER_TYPES = frozenset(AdapterRegistry.list_providers())
 # 原生接入第一阶段的 Vertex：任务类型以 Adapter 声明为准，不受快照模型
 # 数量影响，避免上游快照新增模型时自动启用未实现任务（第 5.2 节）。
 _TASK_LIMITED_PROVIDER_TYPES = frozenset({VERTEX_PROVIDER_TYPE})
+# Providers missing from Models.dev. Model IDs remain discoverable via /v1/models.
+_LOCAL_PROVIDERS: tuple[dict[str, Any], ...] = (
+    {
+        "provider_type": "infistar",
+        "display_name": "Infistar",
+        "default_url": "https://infistar.cc/v1",
+        "api": "https://infistar.cc/v1",
+        "icon_path": "/icons/model/catalog/infistar.svg",
+        "models_dev_provider_id": None,
+        "supported_task_types": ["embedding", "llm", "rerank"],
+        "model_counts": {"llm": 0, "embedding": 0, "rerank": 0},
+        "models": [],
+    },
+)
 _EMBEDDING_FAMILIES = {
     "text-embedding",
     "mistral-embed",
@@ -83,9 +100,7 @@ _EMBEDDING_FAMILIES = {
 }
 
 # 进程级 catalog snapshot 缓存：key 为 (快照文件路径, mtime)，避免每次请求重复解析大 JSON。
-_SNAPSHOT_CACHE: dict[
-    tuple[Path, int], tuple[dict[str, Any], str, str | None]
-] = {}
+_SNAPSHOT_CACHE: dict[tuple[Path, int], tuple[dict[str, Any], str, str | None]] = {}
 
 
 class ModelProviderCatalogService:
@@ -169,7 +184,9 @@ class ModelProviderCatalogService:
         catalog_match = await self.match_saved_provider(provider_type, url)
         if catalog_match is None:
             return False
-        return await self.supports_reasoning(catalog_match.catalog_provider_type, model_id)
+        return await self.supports_reasoning(
+            catalog_match.catalog_provider_type, model_id
+        )
 
     async def refresh(self) -> None:
         try:
@@ -191,7 +208,9 @@ class ModelProviderCatalogService:
                 "Refreshed model provider catalog cache from Models.dev",
             )
         except Exception as exc:
-            logger.warning("Catalog refresh failed, keeping last successful cache: {}", exc)
+            logger.warning(
+                "Catalog refresh failed, keeping last successful cache: {}", exc
+            )
 
     async def match_saved_provider(
         self, provider_type: str, url: str
@@ -250,7 +269,8 @@ class ModelProviderCatalogService:
         }:
             try:
                 provider = self._find_provider(
-                    self._load_current_snapshot()[0], catalog_match.catalog_provider_type
+                    self._load_current_snapshot()[0],
+                    catalog_match.catalog_provider_type,
                 )
             except Exception:
                 provider = None
@@ -283,11 +303,17 @@ class ModelProviderCatalogService:
                     if self.cache_metadata_path.exists()
                     else {}
                 )
-                result = snapshot, "cache", metadata.get("last_refreshed_at")
+                result = (
+                    self._with_local_providers(snapshot),
+                    "cache",
+                    metadata.get("last_refreshed_at"),
+                )
                 _SNAPSHOT_CACHE[(cache_path, cache_mtime)] = result
                 return result
             except Exception as exc:
-                logger.warning("Failed to load catalog cache, falling back to bundled: {}", exc)
+                logger.warning(
+                    "Failed to load catalog cache, falling back to bundled: {}", exc
+                )
 
         bundled_path = self.bundled_snapshot_path
         bundled_mtime = bundled_path.stat().st_mtime_ns
@@ -297,9 +323,39 @@ class ModelProviderCatalogService:
         snapshot = self._read_json(bundled_path)
         if not self._is_current_snapshot(snapshot):
             raise ValueError("Bundled catalog snapshot schema is outdated")
-        result = snapshot, "bundled", None
+        result = self._with_local_providers(snapshot), "bundled", None
         _SNAPSHOT_CACHE[(bundled_path, bundled_mtime)] = result
         return result
+
+    @staticmethod
+    def _with_local_providers(snapshot: dict[str, Any]) -> dict[str, Any]:
+        local_providers = {
+            provider["provider_type"]: provider for provider in _LOCAL_PROVIDERS
+        }
+        provider_types = {
+            provider["provider_type"] for provider in snapshot.get("providers", [])
+        }
+        return {
+            **snapshot,
+            "providers": [
+                *(
+                    {
+                        **provider,
+                        "icon_path": local_providers[provider["provider_type"]][
+                            "icon_path"
+                        ],
+                    }
+                    if provider["provider_type"] in local_providers
+                    else provider
+                    for provider in snapshot.get("providers", [])
+                ),
+                *(
+                    provider
+                    for provider in _LOCAL_PROVIDERS
+                    if provider["provider_type"] not in provider_types
+                ),
+            ],
+        }
 
     def _find_provider(
         self, snapshot: dict[str, Any], provider_type: str
@@ -386,10 +442,12 @@ class ModelProviderCatalogService:
             }
             providers.append(provider_payload)
 
-        return {
-            "schema_version": _SNAPSHOT_SCHEMA_VERSION,
-            "providers": providers,
-        }
+        return self._with_local_providers(
+            {
+                "schema_version": _SNAPSHOT_SCHEMA_VERSION,
+                "providers": providers,
+            }
+        )
 
     def _bundled_provider_urls(self) -> dict[str, str]:
         bundled_snapshot = self._read_json(self.bundled_snapshot_path)
@@ -400,12 +458,18 @@ class ModelProviderCatalogService:
                 continue
             provider_type = provider.get("provider_type")
             api_url = provider.get("api") or provider.get("default_url")
-            if isinstance(provider_type, str) and isinstance(api_url, str) and api_url.strip():
+            if (
+                isinstance(provider_type, str)
+                and isinstance(api_url, str)
+                and api_url.strip()
+            ):
                 provider_urls[provider_type] = api_url
 
         return provider_urls
 
-    def _normalize_model(self, model_id: str, raw_model: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_model(
+        self, model_id: str, raw_model: dict[str, Any]
+    ) -> dict[str, Any]:
         display_name = str(raw_model.get("name") or model_id)
         family = str(raw_model.get("family") or "")
         task_type = self._classify_model(display_name, family)
@@ -419,7 +483,9 @@ class ModelProviderCatalogService:
             "cost": raw_model.get("cost"),
         }
 
-        if metadata is not None and not any(value is not None for value in metadata.values()):
+        if metadata is not None and not any(
+            value is not None for value in metadata.values()
+        ):
             metadata = None
 
         return {
@@ -434,9 +500,8 @@ class ModelProviderCatalogService:
         lowered_family = family.lower()
 
         if (
-            ("embed" in lowered_name or "embedding" in lowered_name)
-            and lowered_family in _EMBEDDING_FAMILIES
-        ):
+            "embed" in lowered_name or "embedding" in lowered_name
+        ) and lowered_family in _EMBEDDING_FAMILIES:
             return "embedding"
         if "rerank" in lowered_name:
             return "rerank"
@@ -535,10 +600,9 @@ class ModelProviderCatalogService:
         return _CATALOG_ICON_PATH_TEMPLATE.format(provider_id=provider_id)
 
     def _is_current_snapshot(self, snapshot: dict[str, Any]) -> bool:
-        return (
-            snapshot.get("schema_version") == _SNAPSHOT_SCHEMA_VERSION
-            and isinstance(snapshot.get("providers"), list)
-        )
+        return snapshot.get(
+            "schema_version"
+        ) == _SNAPSHOT_SCHEMA_VERSION and isinstance(snapshot.get("providers"), list)
 
     def _read_json(self, path: Path) -> dict[str, Any]:
         with path.open("r", encoding="utf-8") as handle:

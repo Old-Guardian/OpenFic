@@ -23,6 +23,7 @@ export interface MarkdownEditorProps {
   /** 标题失焦时的隐式保存，独立于显式保存；调用方据此受自动保存开关控制 */
   onTitleBlurSave?: () => void;
   isSaving?: boolean;
+  isSaveBlocked?: boolean;
   hasChanges?: boolean;
   isLocked?: boolean;
   onLockedAction?: () => void;
@@ -79,6 +80,7 @@ export function MarkdownEditor({
   onSave,
   onTitleBlurSave,
   isSaving = false,
+  isSaveBlocked = false,
   hasChanges = false,
   isLocked = false,
   onLockedAction,
@@ -96,8 +98,10 @@ export function MarkdownEditor({
   onScrollPositionChange,
 }: MarkdownEditorProps) {
   const { t } = useTranslation();
-  const contentSyncedRef = useRef(content);
-  const initialContentRef = useRef(content);
+  // Multipart form submissions normalize line endings to CRLF.
+  const normalizedContent = useMemo(() => content.replace(/\r\n?/g, "\n"), [content]);
+  const contentSyncedRef = useRef(normalizedContent);
+  const initialContentRef = useRef(normalizedContent);
   const onSaveRef = useRef(onSave);
   const onLockedActionRef = useRef(onLockedAction);
   const isLockedRef = useRef(isLocked);
@@ -220,13 +224,19 @@ export function MarkdownEditor({
       if (isPlaceholderTrailingParagraph) {
         return;
       }
-      if (!transaction.docChanged && !appendedTransactions.some((appended) => appended.docChanged)) {
+      if (
+        !transaction.docChanged &&
+        !appendedTransactions.some((appended) => appended.docChanged)
+      ) {
         return;
       }
       const markdown = editorRef.current?.getMarkdown();
-      if (markdown !== undefined && markdown !== contentSyncedRef.current) {
-        contentSyncedRef.current = markdown;
-        onContentChange(markdown);
+      if (markdown !== undefined) {
+        const normalizedMarkdown = markdown.replace(/\r\n?/g, "\n");
+        if (normalizedMarkdown !== contentSyncedRef.current) {
+          contentSyncedRef.current = normalizedMarkdown;
+          onContentChange(normalizedMarkdown);
+        }
       }
     };
     editor.on("update", onUpdate);
@@ -243,11 +253,14 @@ export function MarkdownEditor({
   useEffect(() => {
     const currentEditor = editorRef.current;
     if (!currentEditor) return;
-    if (content === contentSyncedRef.current) return;
+    if (normalizedContent === contentSyncedRef.current) return;
 
-    contentSyncedRef.current = content;
-    currentEditor.commands.setContent(content, { contentType: "markdown", emitUpdate: false });
-  }, [content, editor]);
+    contentSyncedRef.current = normalizedContent;
+    currentEditor.commands.setContent(normalizedContent, {
+      contentType: "markdown",
+      emitUpdate: false,
+    });
+  }, [normalizedContent, editor]);
 
   const flushScrollPosition = useCallback(() => {
     if (scrollPositionTimerRef.current) {
@@ -319,10 +332,14 @@ export function MarkdownEditor({
   );
 
   const handleTitleBlur = useCallback(() => {
-    if (hasChanges && !isLocked) {
-      onTitleBlurSave?.();
+    if (hasChanges && !isLocked && !isSaveBlocked) {
+      if (onTitleBlurSave) {
+        onTitleBlurSave();
+      } else {
+        onSave();
+      }
     }
-  }, [hasChanges, isLocked, onTitleBlurSave]);
+  }, [hasChanges, isLocked, isSaveBlocked, onSave, onTitleBlurSave]);
 
   const saveStatus = isSaving ? "saving" : hasChanges ? "unsaved" : "saved";
   const wordCount = externalWordCount ?? editor?.storage.characterCount?.characters() ?? 0;

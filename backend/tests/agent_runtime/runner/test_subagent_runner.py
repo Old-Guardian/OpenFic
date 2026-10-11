@@ -502,7 +502,7 @@ async def test_subagent_runner_uses_child_thread_history_and_parent_task(
         and message.agent_id == "writer"
         for message in child_messages
     )
-    assert [message.content for message in captured["initial_state"]["messages"]] == [
+    assert [message.content for message in captured["initial_state"]["messages"].value] == [
         "child-only",
         "write",
     ]
@@ -610,9 +610,14 @@ async def test_subagent_runner_uses_request_parent_revision_for_notify_turn(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider_type, compaction_provider, cost", [
+    ("openai", "openai-codex", 0.0),
+    ("openai-codex", "openai", 0.000043),
+])
 async def test_subagent_runner_passes_compaction_sinks_to_child_graph(
     db_session_factory,
     monkeypatch,
+    provider_type, compaction_provider, cost,
 ):
     from app.agent_runtime.runner.subagent_runner import SubagentRunner
 
@@ -641,6 +646,8 @@ async def test_subagent_runner_passes_compaction_sinks_to_child_graph(
             configurable = config["configurable"]
             assert callable(configurable["agent_event_sink"])
             assert callable(configurable["compaction_usage_sink"])
+            assert configurable["model_config"]["max_context_tokens"] == 8000
+            assert callable(configurable["history_seq_resolver"])
 
             await configurable["agent_event_sink"](
                 "agent:compaction_start",
@@ -653,6 +660,13 @@ async def test_subagent_runner_passes_compaction_sinks_to_child_graph(
             await configurable["compaction_usage_sink"](
                 {
                     "usage_kind": "compaction",
+                    "billing_config": {
+                        "provider_type": compaction_provider,
+                        "input_price": 2.0,
+                        "output_price": 8.0,
+                        "cache_read_price": 0.5,
+                        "cache_write_price": 1.0,
+                    },
                     "session_id": "child-thread-compaction",
                     "task_id": "task-1",
                     "trigger": "auto",
@@ -684,6 +698,7 @@ async def test_subagent_runner_passes_compaction_sinks_to_child_graph(
 
     async def fake_persist_parent_usage(row_arg, payload):
         persisted_usage.append((row_arg.id, payload))
+        await persist_parent_usage(row_arg, payload)
 
     monkeypatch.setattr("app.agent_runtime.runner.subagent_runner.emit", fake_emit)
     monkeypatch.setattr(
@@ -698,7 +713,7 @@ async def test_subagent_runner_passes_compaction_sinks_to_child_graph(
     runner = SubagentRunner(
         session_factory=db_session_factory,
         model_config={
-            "provider_type": "openai",
+            "provider_type": provider_type,
             "base_url": "",
             "api_key": "key",
             "model_id": "gpt-test",
@@ -706,6 +721,7 @@ async def test_subagent_runner_passes_compaction_sinks_to_child_graph(
         },
         project_id="project-1",
     )
+    persist_parent_usage = runner._persist_parent_task_usage_and_emit_delta
     monkeypatch.setattr(
         runner,
         "_persist_parent_task_usage_and_emit_delta",
@@ -734,12 +750,28 @@ async def test_subagent_runner_passes_compaction_sinks_to_child_graph(
                 "token_input": 11,
                 "token_output": 3,
                 "token_cache": 2,
-                "cost": 0.0,
+                "cost": cost,
                 "context_input_tokens": 11,
                 "context_length": 8000,
             },
         )
     ]
+    async with db_session_factory() as session:
+        task = await session.get(Task, "task-1")
+        child = await session.get(AgentChildRun, row.id)
+        assert task is not None
+        assert (task.token_input, task.token_output, task.token_cache) == (11, 3, 2)
+        assert task.cost == cost
+        assert child is not None
+        assert child.metadata_json["token_usage"]["cost"] == cost
+    assert (
+        "agent:task_usage_delta",
+        {
+            "session_id": "parent-session", "task_id": "task-1",
+            "token_input": 11, "token_output": 3, "token_cache": 2, "cost": cost,
+        },
+        "agent_session:parent-session",
+    ) in emitted
 
 
 @pytest.mark.asyncio
@@ -1004,7 +1036,7 @@ async def test_subagent_runner_drains_queued_notify_requests_on_same_child_threa
 
     class FakeGraph:
         async def astream_events(self, initial_state, config=None, version=None):
-            last_message = initial_state["messages"][-1]
+            last_message = initial_state["messages"].value[-1]
             yield {
                 "event": "on_chain_end",
                 "data": {"output": {
@@ -1016,7 +1048,7 @@ async def test_subagent_runner_drains_queued_notify_requests_on_same_child_threa
             }
 
         async def ainvoke(self, initial_state, config=None):
-            last_message = initial_state["messages"][-1]
+            last_message = initial_state["messages"].value[-1]
             return {
                 "messages": [AIMessage(content=f"reply:{last_message.content}")],
                 "iteration_count": 1,
@@ -1855,13 +1887,19 @@ async def test_subagent_runner_streams_and_persists_child_transcript_on_child_th
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider_type, cost", [("openai", 0.00007), ("openai-codex", 0.0)])
 async def test_subagent_runner_accumulates_parent_task_usage_and_persists_child_usage_snapshot(
     db_session_factory,
     monkeypatch,
+    provider_type, cost,
 ):
     from app.agent_runtime.runner.subagent_runner import SubagentRunner
 
     async with db_session_factory() as session:
+        task = await session.get(Task, "task-1")
+        assert task is not None
+        task.cost = 0.25
+        await session.commit()
         row = await create_child_run(
             session,
             parent_session_id="parent-session",
@@ -1929,7 +1967,7 @@ async def test_subagent_runner_accumulates_parent_task_usage_and_persists_child_
         "app.agent_runtime.runner.subagent_runner._resolve_agent_model_config",
         AsyncMock(
             return_value={
-                "provider_type": "openai",
+                "provider_type": provider_type,
                 "base_url": "",
                 "api_key": "key",
                 "model_id": "child-model",
@@ -1962,13 +2000,13 @@ async def test_subagent_runner_accumulates_parent_task_usage_and_persists_child_
     assert task.token_output == 7
     assert task.token_cache == 3
     assert task.context_input_tokens == 18
-    assert task.cost == 0.00007
+    assert task.cost == 0.25 + cost
     assert child is not None
     assert child.metadata_json["token_usage"] == {
         "token_input": 18,
         "token_output": 7,
         "token_cache": 3,
-        "cost": 0.00007,
+        "cost": cost,
         "context_input_tokens": 18,
         "context_length": 16000,
     }
@@ -1980,7 +2018,7 @@ async def test_subagent_runner_accumulates_parent_task_usage_and_persists_child_
             "token_input": 18,
             "token_output": 7,
             "token_cache": 3,
-            "cost": 0.00007,
+            "cost": cost,
         },
         "agent_session:parent-session",
     ) in emitted

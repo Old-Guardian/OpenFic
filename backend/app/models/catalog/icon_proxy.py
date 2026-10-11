@@ -4,13 +4,18 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from dataclasses import dataclass
+from pathlib import Path
+import time
 from typing import Literal, Protocol
 
 import httpx
 
-CatalogIconSource = Literal["models_dev", "jsdelivr", "default"]
+CatalogIconSource = Literal["models_dev", "jsdelivr", "local", "default"]
+
+_LOCAL_ICON_PATHS = {
+    "infistar": Path(__file__).resolve().parent / "assets" / "logos" / "infistar.svg",
+}
 
 _MAX_CONCURRENT_UPSTREAM_REQUESTS = 8
 _MODELS_DEV_RETRY_DELAY_SECONDS = 30.0
@@ -56,7 +61,9 @@ class CatalogIconProxyService:
     def __init__(
         self, timeout: float = 5.0, client: _IconHttpClient | None = None
     ) -> None:
-        self._client = client or httpx.AsyncClient(timeout=timeout, follow_redirects=True)
+        self._client = client or httpx.AsyncClient(
+            timeout=timeout, follow_redirects=True
+        )
         self._request_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_UPSTREAM_REQUESTS)
         self._models_dev_unavailable_until = 0.0
 
@@ -64,6 +71,11 @@ class CatalogIconProxyService:
         await self._client.aclose()
 
     async def fetch_icon(self, provider_id: str) -> CatalogIconPayload:
+        local_icon_path = _LOCAL_ICON_PATHS.get(provider_id)
+        if local_icon_path is not None:
+            return CatalogIconPayload(
+                content=local_icon_path.read_bytes(), source="local"
+            )
         if not provider_id:
             return self._default_icon()
 
@@ -76,7 +88,9 @@ class CatalogIconProxyService:
         async with self._request_semaphore:
             return await self._request_icon(_JSDELIVR_SOURCE, provider_id)
 
-    async def _fetch_models_dev_or_default(self, provider_id: str) -> CatalogIconPayload:
+    async def _fetch_models_dev_or_default(
+        self, provider_id: str
+    ) -> CatalogIconPayload:
         if self._is_models_dev_unavailable():
             return self._default_icon()
 
