@@ -33,7 +33,7 @@ def _columns(inspector, table: str) -> set[str]:
 
 def test_empty_database_has_single_head_and_graph_schema(database: Path) -> None:
     scripts = ScriptDirectory.from_config(_config())
-    assert scripts.get_heads() == ["1028"]
+    assert scripts.get_heads() == ["1029"]
     assert scripts.get_revision("1026").down_revision == "1025"
     assert scripts.get_revision("1027").down_revision == "1026"
     assert scripts.get_revision("1028").down_revision == "1027"

@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
-"""集成测试：验证 1027 与 1028 迁移在隔离数据库上的完整升级与降级生命周期。
+"""集成测试：验证 fork 迁移在隔离数据库上的完整升级与降级生命周期。
 
 验证目标（实施计划 A）：
-1. Alembic heads 唯一且为 1028，迁移链 1025 -> 1026 -> 1027 -> 1028 连续。
-2. 空库可直接升级到 head (1028)，包含所有既有特性表/列、OAuth 注册表与 1028 索引。
+1. Alembic heads 唯一且为 1029，迁移链 1025 -> 1026 -> 1027 -> 1028 -> 1029 连续。
+2. 空库可直接升级到 head (1029)，包含所有既有特性表/列、OAuth 注册表与 1028 索引。
 3. 针对已部署的 fork 1026 数据库：
    - 保留既有 Vertex 配置与加密凭据 (model_providers.provider_config, credentials_encrypted)
    - 保留 Agent 定义推理强度 (agent_definitions.reasoning_effort)
    - 保留知识与角色别名 (world_info_entry_aliases, character_aliases, aliases_json)
    - 保留附件提取内容 (agent_attachments.content, content_length)
    - 保留角色图谱坐标与关系 (characters.graph_x, graph_y, character_relationships)
-4. 1028 -> 1026 降级只删除 OAuth 注册表及 1028 索引，绝对不删除共享凭据列 credentials_encrypted，所有既有数据完好。
-5. 降级后再升级回 1028 依然正常且数据完好。
+4. 1029 -> 1026 降级删除新增审计元数据、OAuth 注册表及索引，保留共享凭据列 credentials_encrypted 和既有数据。
+5. 降级后再升级回 1029 依然正常且数据完好。
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from sqlalchemy import create_engine, inspect, text
 
 from app.storage.database import ALEMBIC_INI_PATH
 
-EXPECTED_HEAD = "1028"
+EXPECTED_HEAD = "1029"
 FORK_HEAD = "1026"
 
 EXPECTED_1028_INDEXES = {
@@ -66,6 +66,8 @@ def test_migration_chain_is_unique_and_linear() -> None:
     scripts = ScriptDirectory.from_config(_config())
     assert scripts.get_heads() == [EXPECTED_HEAD]
 
+    assert scripts.get_revision("1029").down_revision == "1028"
+
     rev_1028 = scripts.get_revision("1028")
     assert rev_1028.down_revision == "1027"
 
@@ -79,7 +81,7 @@ def test_migration_chain_is_unique_and_linear() -> None:
     assert rev_1025.down_revision == "1024"
 
 
-def test_empty_database_upgrades_to_head_1028(database: Path) -> None:
+def test_empty_database_upgrades_to_head_1029(database: Path) -> None:
     command.upgrade(_config(), "head")
 
     engine = _engine(database)
@@ -99,6 +101,8 @@ def test_empty_database_upgrades_to_head_1028(database: Path) -> None:
         # 检查 1028 索引
         for table, index_name in EXPECTED_1028_INDEXES:
             assert index_name in _indexes(inspector, table), f"Missing index {index_name} on {table}"
+
+        assert {"has_details", "detail_bytes"} <= _columns(inspector, "agent_audit_logs")
 
         # 检查 fork 既有特性结构依然完整
         assert {"provider_config", "credentials_encrypted"} <= _columns(inspector, "model_providers")
@@ -209,7 +213,7 @@ def test_deployed_fork_1026_database_upgrades_downgrades_and_reupgrades_cleanly(
     finally:
         engine.dispose()
 
-    # 2. 从已部署的 1026 升级到 head (1028)
+    # 2. 从已部署的 1026 升级到 head (1029)
     command.upgrade(_config(), "head")
 
     engine = _engine(database)
@@ -275,7 +279,7 @@ def test_deployed_fork_1026_database_upgrades_downgrades_and_reupgrades_cleanly(
     finally:
         engine.dispose()
 
-    # 3. 降级 1028 -> 1026
+    # 3. 降级 1029 -> 1026
     command.downgrade(_config(), FORK_HEAD)
 
     engine = _engine(database)
@@ -328,7 +332,7 @@ def test_deployed_fork_1026_database_upgrades_downgrades_and_reupgrades_cleanly(
     finally:
         engine.dispose()
 
-    # 4. 从 1026 重新升级回 head (1028)
+    # 4. 从 1026 重新升级回 head (1029)
     command.upgrade(_config(), "head")
 
     engine = _engine(database)
