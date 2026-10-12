@@ -12,6 +12,7 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent_runtime.context import ContextBuildError, build_context_parts
+from app.agent_runtime.continuation import RESUMPTION_PROMPT
 from app.agent_runtime.context.compaction.service import CompactionError, compact_window
 from app.agent_runtime.context.settings import load_context_settings
 from app.agent_runtime.context.compaction.window import (
@@ -55,6 +56,7 @@ from app.socket import emit
 from app.socket.handlers import agent_session_room
 from app.storage.database import _get_session_factory, create_session
 from app.storage.repos import revision_repo
+from app.storage.models.revision import Revision
 from app.storage.services import task_service
 
 _HELD_EVENT_SESSION_IDS: ContextVar[frozenset[str]] = ContextVar(
@@ -320,15 +322,6 @@ class SessionRunner:
                 await self._persister.finalize(reason="error")
             except PersistenceError:
                 pass
-        await emit(
-            "agent:error",
-            {
-                "session_id": self.session_id,
-                "type": error_type,
-                "reason": self._exception_reason(exc),
-            },
-            room=self._room,
-        )
         status_session = await create_session()
         try:
             revision_status = "interrupted" if resumable_state is not None else "failed"
@@ -338,7 +331,18 @@ class SessionRunner:
             await status_session.commit()
         finally:
             await status_session.close()
-        if resumable_state is not None and finalized:
+        if finalized or revision_id is None:
+            await emit(
+                "agent:error",
+                {
+                    "session_id": self.session_id,
+                    "type": error_type,
+                    "reason": self._exception_reason(exc),
+                    **({"round_id": revision_id} if revision_id else {}),
+                },
+                room=self._room,
+            )
+        if resumable_state is not None and finalized and revision_id:
             await self._emit_pending_interrupts(resumable_state)
         await self._clear_replay_session()
 
@@ -851,6 +855,7 @@ class SessionRunner:
         user_request: str,
         attachments: list[dict[str, Any]] | None = None,
         user_message_id: str | None = None,
+        revision_id: str | None = None,
     ) -> None:
         runtime_session = await create_session()
         runtime_context: dict[str, Any] = {}
@@ -865,6 +870,8 @@ class SessionRunner:
             runtime_context=runtime_context,
             audit_context=audit_context,
         )
+        if revision_id is not None:
+            config["configurable"]["resumption_prompt"] = RESUMPTION_PROMPT
         self._cancel_event.clear()
         reason: Literal["done", "cancelled", "error"] = "done"
         revision = None
@@ -873,7 +880,12 @@ class SessionRunner:
             history_messages = await self._prepare_run_persistence()
             graph = await self._get_graph()
             referenced_skill_ids = extract_referenced_skill_ids([user_request])
-            if user_message_id is None:
+            if revision_id is not None:
+                revision = await runtime_session.get(Revision, revision_id)
+                if revision is None or revision.status == "cancelled":
+                    return
+                state_user_request = ""
+            elif user_message_id is None:
                 compiled_user_request = await self._compile_user_message_content(
                     user_request,
                     db_session=runtime_session,
@@ -956,7 +968,7 @@ class SessionRunner:
             try:
                 await finalize_revision_status(
                     status_session,
-                    revision.id if revision is not None else None,
+                    revision.id if revision is not None else revision_id,
                     "cancelled",
                 )
                 await status_session.commit()
@@ -967,7 +979,7 @@ class SessionRunner:
         except PersistenceError as e:
             await self._handle_stream_failure(
                 graph=graph,
-                revision_id=revision.id if revision is not None else None,
+                revision_id=revision.id if revision is not None else revision_id,
                 error_type="persistence_failure",
                 exc=e,
             )
@@ -975,7 +987,7 @@ class SessionRunner:
         except Exception as e:
             await self._handle_stream_failure(
                 graph=graph,
-                revision_id=revision.id if revision is not None else None,
+                revision_id=revision.id if revision is not None else revision_id,
                 error_type="runtime_failure",
                 exc=e,
             )

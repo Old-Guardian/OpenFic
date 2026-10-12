@@ -6,6 +6,7 @@ import {
   CloudUpload,
   ExternalLink,
   Plus,
+  Play,
   ShieldCheck,
   Square,
   X,
@@ -49,6 +50,10 @@ import { AgentFileAttachmentCard } from "./agent-file-attachment-card";
 import { AgentIndexStatusIndicator } from "./agent-index-status-indicator";
 import { canSendAgentInput, getAgentInputBodyMode, isAgentInputLocked } from "./agent-input-state";
 import { AgentMentionSuggestions } from "./agent-mention-suggestions";
+import {
+  getNextToolbarCompressionLevel,
+  MAX_TOOLBAR_COMPRESSION_LEVEL,
+} from "./agent-toolbar-compression";
 import { AgentPendingMessageCard } from "./pending-message-card";
 
 interface AgentInputProps {
@@ -68,6 +73,10 @@ interface AgentInputProps {
   onAttachmentsChange: (attachments: PendingAgentAttachment[]) => void;
   onSend: () => void;
   onAbort: () => void;
+  canContinue?: boolean;
+  isContinuing?: boolean;
+  isStopping?: boolean;
+  onContinue?: () => void | Promise<boolean>;
   onModelChange: (modelId: string) => void;
   onReasoningEffortChange?: (reasoningEffort: ReasoningEffort) => void;
   onAgentChange?: (agentKey: string) => void;
@@ -87,8 +96,6 @@ interface AgentInputProps {
   [ignoredModeSelectorProp: string]: unknown;
 }
 
-const MAX_TOOLBAR_COMPRESSION_LEVEL = 4;
-
 export function AgentInput({
   projectId,
   value,
@@ -106,6 +113,10 @@ export function AgentInput({
   onAttachmentsChange,
   onSend,
   onAbort,
+  canContinue = false,
+  isContinuing = false,
+  isStopping = false,
+  onContinue,
   onModelChange,
   onReasoningEffortChange,
   onAgentChange,
@@ -128,7 +139,7 @@ export function AgentInput({
   const hasContent = value.trim().length > 0 || attachments.length > 0;
   const hasPendingMessage = pendingMessage !== null;
   const isComposerLocked = isAgentInputLocked({
-    disabled,
+    disabled: disabled || isStopping,
     readOnly,
     hasPendingMessage,
   });
@@ -136,16 +147,27 @@ export function AgentInput({
     attachments.some((attachment) => attachment.status === "uploading") ||
     (isSending &&
       attachments.some((attachment) => attachment.file && !attachment.uploadedAttachment));
-  const shouldAbort = isSending && !hasContent;
+  const shouldAbort = isSending && !isStopping && !hasContent;
   const canSend = canSendAgentInput({
     hasContent,
-    disabled: disabled || isProcessingAttachments,
+    disabled: disabled || isStopping || isProcessingAttachments,
     readOnly,
     hasPendingMessage,
     bodyMode,
   });
   const shouldShowPendingMessage = hasPendingMessage && bodyMode === "composer" && !readOnly;
-  const buttonActive = shouldAbort || canSend;
+  const shouldContinue =
+    canContinue &&
+    !hasContent &&
+    !hasPendingMessage &&
+    !isSending &&
+    !readOnly &&
+    bodyMode === "composer" &&
+    (agentStatus === "idle" || agentStatus === "error") &&
+    Boolean(onContinue);
+  const buttonActive = isStopping || shouldAbort || shouldContinue || canSend;
+  const isButtonDisabled =
+    isStopping || (shouldAbort ? false : shouldContinue ? disabled || isContinuing : !canSend);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   const [pendingClearanceHeight, setPendingClearanceHeight] = useState(0);
   const [mentionSuggestions, setMentionSuggestions] = useState<AgentComposerSuggestionState | null>(
@@ -155,7 +177,9 @@ export function AgentInput({
   const [isAddMenuOpen, setIsAddMenuOpen] = useState(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const toolbarCompressionLevelRef = useRef(0);
+  const previousToolbarContentKeyRef = useRef<string | null>(null);
   const previousToolbarWidthRef = useRef<number | null>(null);
+  const toolbarCompressionResetFrameRef = useRef<number | null>(null);
   const [toolbarCompressionLevel, setToolbarCompressionLevel] = useState(0);
   const addMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const imageFileInputRef = useRef<HTMLInputElement>(null);
@@ -213,6 +237,7 @@ export function AgentInput({
     models.length,
     modelsError,
     modelId,
+    selectedModel?.name ?? "",
     reasoningEffort ?? "",
     shouldShowReasoningEffort,
     toolApprovalBypassEnabled,
@@ -261,9 +286,10 @@ export function AgentInput({
   );
 
   const handleSubmit = useCallback(() => {
+    if (isStopping) return;
     recordInputHistory(value);
     onSend();
-  }, [onSend, recordInputHistory, value]);
+  }, [isStopping, onSend, recordInputHistory, value]);
 
   useLayoutEffect(() => {
     const container = inputContainerRef.current;
@@ -302,27 +328,60 @@ export function AgentInput({
     if (!toolbar) return;
 
     const syncOverflow = (allowExpand: boolean) => {
+      if (toolbarCompressionResetFrameRef.current !== null) return;
+
       const currentLevel = toolbarCompressionLevelRef.current;
+      const contentChanged =
+        previousToolbarContentKeyRef.current !== null &&
+        previousToolbarContentKeyRef.current !== toolbarContentKey;
+      previousToolbarContentKeyRef.current = toolbarContentKey;
+
+      if (contentChanged && currentLevel > 0) {
+        if (toolbarCompressionResetFrameRef.current === null) {
+          toolbarCompressionResetFrameRef.current = requestAnimationFrame(() => {
+            toolbarCompressionResetFrameRef.current = null;
+            updateToolbarCompressionLevel(0);
+          });
+        }
+        return;
+      }
+
       const currentWidth = toolbar.clientWidth;
       const previousWidth = previousToolbarWidthRef.current;
       const widthIncreased = previousWidth !== null && currentWidth > previousWidth + 1;
       const isOverflowing = toolbar.scrollWidth > currentWidth + 1;
+      const nextLevel = getNextToolbarCompressionLevel({
+        currentLevel,
+        isOverflowing,
+        contentChanged,
+        allowExpand,
+        widthIncreased,
+      });
       previousToolbarWidthRef.current = currentWidth;
 
-      if (isOverflowing && currentLevel < MAX_TOOLBAR_COMPRESSION_LEVEL) {
-        updateToolbarCompressionLevel(currentLevel + 1);
-      } else if (allowExpand && widthIncreased && !isOverflowing && currentLevel > 0) {
-        updateToolbarCompressionLevel(currentLevel - 1);
-      }
+      if (nextLevel !== currentLevel) updateToolbarCompressionLevel(nextLevel);
     };
 
     syncOverflow(false);
 
-    if (typeof ResizeObserver === "undefined") return;
+    if (typeof ResizeObserver === "undefined") {
+      return () => {
+        if (toolbarCompressionResetFrameRef.current !== null) {
+          cancelAnimationFrame(toolbarCompressionResetFrameRef.current);
+          toolbarCompressionResetFrameRef.current = null;
+        }
+      };
+    }
 
     const resizeObserver = new ResizeObserver(() => syncOverflow(true));
     resizeObserver.observe(toolbar);
-    return () => resizeObserver.disconnect();
+    return () => {
+      resizeObserver.disconnect();
+      if (toolbarCompressionResetFrameRef.current !== null) {
+        cancelAnimationFrame(toolbarCompressionResetFrameRef.current);
+        toolbarCompressionResetFrameRef.current = null;
+      }
+    };
   }, [toolbarCompressionLevel, toolbarContentKey, updateToolbarCompressionLevel]);
 
   useEffect(() => {
@@ -895,9 +954,22 @@ export function AgentInput({
                 variant="solid"
                 size="1"
                 className="ai-sidebar-send-button"
-                onClick={shouldAbort ? onAbort : handleSubmit}
-                disabled={shouldAbort ? false : !canSend}
-                aria-disabled={!buttonActive || undefined}
+                onClick={
+                  shouldAbort ? onAbort : shouldContinue ? () => void onContinue?.() : handleSubmit
+                }
+                disabled={isButtonDisabled}
+                data-stopping={isStopping || undefined}
+                aria-label={
+                  isStopping
+                    ? t("assistant.stopping")
+                    : shouldAbort
+                      ? t("assistant.stop")
+                      : shouldContinue
+                        ? t("assistant.continueSession")
+                        : t("assistant.sendMessage")
+                }
+                aria-busy={isStopping || undefined}
+                aria-disabled={isButtonDisabled || undefined}
                 style={{
                   width: "26px",
                   height: "26px",
@@ -910,9 +982,16 @@ export function AgentInput({
                   pointerEvents: buttonActive ? undefined : "none",
                 }}
               >
-                {shouldAbort ? (
+                {isStopping ? (
+                  <Spinner size={18} />
+                ) : shouldAbort ? (
                   <Square
                     size={12}
+                    fill="currentColor"
+                  />
+                ) : shouldContinue ? (
+                  <Play
+                    size={14}
                     fill="currentColor"
                   />
                 ) : disabled ? (

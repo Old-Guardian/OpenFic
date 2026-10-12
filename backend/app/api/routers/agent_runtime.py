@@ -30,6 +30,12 @@ from app.agent_runtime.attachments import (
     serialize_agent_attachment,
 )
 from app.agent_runtime.context.compaction.service import CompactionError
+from app.agent_runtime.current_errors import load_session_current_error, load_subagent_current_turn
+from app.agent_runtime.continuation import (
+    SessionNotContinuableError,
+    claim_continuation,
+    continuation_target,
+)
 from app.agent_runtime.persistence.child_runs import get_child_run_by_pending_approval
 from app.agent_runtime.persistence.child_runs import (
     TERMINAL_CHILD_RUN_STATUSES,
@@ -69,6 +75,8 @@ from app.api.schemas.agent import (
     AgentAttachmentErrorRequest,
     AgentAttachmentResponse,
     AgentCompactionResponse,
+    AgentContinueResponse,
+    AgentCurrentErrorResponse,
     AgentSessionChangesResponse,
     AgentForkRequest,
     AgentForkResponse,
@@ -1304,6 +1312,37 @@ async def send_agent_message(
     )
 
 
+@router.post("/sessions/{session_id}/continue", response_model=AgentContinueResponse)
+async def continue_agent_session(
+    session_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> AgentContinueResponse:
+    registry = get_agent_run_registry()
+    async with _agent_session_lifecycle_lock(registry, session_id):
+        runner = await _get_runner(session_id, session)
+        try:
+            revision, user = await claim_continuation(session, session_id)
+        except SessionNotContinuableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "session_not_continuable", "message": "会话当前没有可继续的未完成任务"},
+            ) from exc
+        coro = runner.run(user_request=user.content, user_message_id=user.id, revision_id=revision.id)
+        try:
+            await _launch_task(
+                db_session_factory=_make_status_session_factory(session),
+                session_id=session_id, task_id=runner.task_id, project_id=runner.project_id,
+                coro=coro, lifecycle_lock_held=True,
+            )
+        except Exception:
+            coro.close()
+            await finalize_revision_status(session, revision.id, "failed")
+            await task_service.update_task(session, task_id=runner.task_id, is_running=False)
+            await session.commit()
+            raise
+    return AgentContinueResponse(success=True, session_id=session_id, message="Agent 任务已继续")
+
+
 @router.post(
     "/sessions/{session_id}/pending-message/cancel",
     response_model=AgentCancelPendingMessageResponse,
@@ -1665,6 +1704,8 @@ async def get_agent_session_state(
     agent_key = state_values.get("agent_key")
     if isinstance(agent_key, str) and agent_key:
         state_summary["agent_key"] = agent_key
+    revision_id = state_values.get("current_revision_id")
+    state_summary["current_revision_id"] = revision_id if isinstance(revision_id, str) and revision_id else None
     is_cancelled = await _is_agent_session_cancelled(session, session_id)
     # A new run can be registered before it commits its new revision.  Keep
     # the live registry state authoritative for running status during that
@@ -1700,12 +1741,16 @@ async def get_agent_session_state(
                     payload["action_id"] = interrupt_id
                     payload["id"] = interrupt_id
                 interrupts.append(payload)
-    if not state_values and not is_running and not interrupts:
+    can_continue = await continuation_target(session, session_id) is not None
+    current_error = await load_session_current_error(session, session_id)
+    if not state_values and not is_running and not interrupts and not can_continue:
         raise NotFoundError(f"会话不存在: {session_id}")
     return AgentSessionStateResponse(
         session_id=session_id,
         state=state_summary,
         is_running=is_running,
+        can_continue=can_continue,
+        current_error=AgentCurrentErrorResponse(**current_error) if current_error else None,
         interrupts=interrupts,
     )
 
@@ -1794,6 +1839,7 @@ async def get_subagent_session(
     metadata = dict(row.metadata_json or {})
     token_usage = metadata.pop("token_usage", {})
     usage = token_usage if isinstance(token_usage, dict) else {}
+    current_request_id, current_error = await load_subagent_current_turn(session, row)
     return SubagentSessionResponse(
         child_run_id=row.id,
         parent_session_id=row.parent_session_id,
@@ -1819,6 +1865,8 @@ async def get_subagent_session(
             else None
         ),
         error=row.error,
+        current_error=AgentCurrentErrorResponse(**current_error) if current_error else None,
+        current_request_id=current_request_id,
         metadata=metadata,
         token_input=int(usage.get("token_input", 0) or 0),
         token_output=int(usage.get("token_output", 0) or 0),
@@ -2186,6 +2234,15 @@ async def cancel_agent_session(
     finally:
         if session_lock is not None:
             session_lock.release()
+    # The tracked task's cleanup needs the same lifecycle lock. Wait only after
+    # releasing it, without forwarding request cancellation into runner cleanup.
+    if parent_task is not None:
+        try:
+            await asyncio.shield(parent_task)
+        except asyncio.CancelledError:
+            request_task = asyncio.current_task()
+            if request_task is not None and request_task.cancelling():
+                raise
     return AgentCancelResponse(
         success=True,
         session_id=session_id,

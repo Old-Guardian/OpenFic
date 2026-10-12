@@ -51,3 +51,4 @@ export { StepperNumberInput } from "./stepper-number-input";
 export type { StepperNumberInputProps } from "./stepper-number-input";
 export { AliasInput } from "./alias-input";
 export type { AliasInputProps } from "./alias-input";
+export { InfoTooltip } from "./info-tooltip";

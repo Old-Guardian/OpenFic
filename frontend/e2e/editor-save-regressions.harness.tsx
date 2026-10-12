@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 
 import tokenCases from "../../tests/fixtures/character-token-count-cases.json" with { type: "json" };
 import { MarkdownEditor } from "../src/components/markdown-editor";
+import { AppShellContext } from "../src/features/app-shell/components/app-shell-context";
 import { CharacterEditor } from "../src/features/characters/components/character-editor";
 import { CharacterList } from "../src/features/characters/components/character-list";
 import { useEditorSessionStore } from "../src/features/editor-session/lib/editor-session-store";
@@ -510,23 +511,42 @@ function EntityRegressionHarness({
   );
 }
 
+const appShell = {
+  isMobile: false,
+  isSidebarOpen: false,
+  isSettingsOpen: false,
+  isAssistantSidebarOpen: false,
+  openSidebar() {},
+  closeSidebar() {},
+  toggleSidebar() {},
+  openSettings() {},
+  closeSettings() {},
+  appendToAssistant() {},
+  openAssistantSidebar() {},
+  closeAssistantSidebar() {},
+  registerAssistantSidebarHost() {},
+  clearAssistantSidebarHost() {},
+};
+
 void preloadTiktokenEncoding().then(() => {
   createRoot(document.getElementById("root")!).render(
-    <StrictMode>
-      {new URLSearchParams(window.location.search).get("mode") === "character" ? (
-        <EntityRegressionHarness kind="character" />
-      ) : new URLSearchParams(window.location.search).get("mode") === "character-tokens" ? (
-        <EntityRegressionHarness
-          kind="character"
-          showTokenList
-        />
-      ) : new URLSearchParams(window.location.search).get("mode") === "world-info" ? (
-        <EntityRegressionHarness kind="world-info" />
-      ) : new URLSearchParams(window.location.search).get("mode") === "hook-lifecycle" ? (
-        <HookLifecycleHost />
-      ) : (
-        <RegressionHarness />
-      )}
-    </StrictMode>,
+    <AppShellContext.Provider value={appShell}>
+      <StrictMode>
+        {new URLSearchParams(window.location.search).get("mode") === "character" ? (
+          <EntityRegressionHarness kind="character" />
+        ) : new URLSearchParams(window.location.search).get("mode") === "character-tokens" ? (
+          <EntityRegressionHarness
+            kind="character"
+            showTokenList
+          />
+        ) : new URLSearchParams(window.location.search).get("mode") === "world-info" ? (
+          <EntityRegressionHarness kind="world-info" />
+        ) : new URLSearchParams(window.location.search).get("mode") === "hook-lifecycle" ? (
+          <HookLifecycleHost />
+        ) : (
+          <RegressionHarness />
+        )}
+      </StrictMode>
+    </AppShellContext.Provider>,
   );
 });

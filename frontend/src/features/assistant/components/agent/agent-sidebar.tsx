@@ -95,6 +95,11 @@ export function useAgentSidebar({
     pendingMessage,
     status: agentStatus,
     isRunning: isAgentRunning,
+    canContinue,
+    isContinuing,
+    isStopping,
+    continueSession,
+    refreshCanContinue,
     isCompacting: isAgentCompacting,
     isRollbacking: isAgentRollbacking,
     isAttachmentProcessing: isAgentAttachmentProcessing,
@@ -141,6 +146,7 @@ export function useAgentSidebar({
   });
 
   const handleSend = useCallback(async () => {
+    if (isStopping) return;
     if (agentStatus === "waiting_answer" || agentStatus === "waiting_approval") {
       toast.error(
         agentStatus === "waiting_answer"
@@ -169,6 +175,7 @@ export function useAgentSidebar({
     onClearAttachments();
     await sendPromise;
   }, [
+    isStopping,
     inputValue,
     agentStatus,
     modelId,
@@ -220,6 +227,11 @@ export function useAgentSidebar({
     pendingMessage,
     status: agentStatus,
     isRunning: isAgentRunning,
+    canContinue,
+    isContinuing,
+    isStopping,
+    onContinue: continueSession,
+    refreshCanContinue,
     isCompacting: isAgentCompacting,
     isRollbacking: isAgentRollbacking,
     currentStage: agentCurrentStage,

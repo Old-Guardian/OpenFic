@@ -11,7 +11,6 @@ import {
   Dialog,
   IconButton,
   Badge,
-  Tooltip,
 } from "@radix-ui/themes";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -30,11 +29,7 @@ import { useState, useCallback, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
-import {
-  LabeledSelect,
-  ModelIdSelect,
-  type ModelIdSelectOption,
-} from "@/components";
+import { LabeledSelect, InfoTooltip, ModelIdSelect, type ModelIdSelectOption } from "@/components";
 import { ContextMenu, type ContextMenuItem, toast, ConfirmDialog, Spinner } from "@/components";
 import { AgentBrandIcon } from "@/components/agent-brand-icon";
 import {
@@ -85,13 +80,13 @@ const MotionBox = motion.create(Box);
 
 const mobilePageVariants = {
   enter: (direction: number) => ({
-    x: direction > 0 ? "100%" : "-100%",
+    transform: direction > 0 ? "translateX(100%)" : "translateX(-100%)",
   }),
   center: {
-    x: 0,
+    transform: "translateX(0%)",
   },
   exit: (direction: number) => ({
-    x: direction > 0 ? "-100%" : "100%",
+    transform: direction > 0 ? "translateX(-100%)" : "translateX(100%)",
   }),
 };
 
@@ -117,11 +112,7 @@ function getTargetModelOption(
     effectiveId = settings?.lightModel ?? "";
   }
   if (!effectiveId) return null;
-  return (
-    llmModelOptions.find(
-      (opt) => opt.value === effectiveId || opt.id === effectiveId,
-    ) ?? null
-  );
+  return llmModelOptions.find((opt) => opt.value === effectiveId || opt.id === effectiveId) ?? null;
 }
 
 function getEnabledToolCategoriesForAgent(
@@ -403,7 +394,7 @@ function AgentForm({
             >
               {t("settings.agentsKind")}
             </Text>
-            <Tooltip
+            <InfoTooltip
               content={
                 <Flex
                   direction="column"
@@ -421,7 +412,7 @@ function AgentForm({
               >
                 <Info size={14} />
               </button>
-            </Tooltip>
+            </InfoTooltip>
           </Flex>
           <LabeledSelect
             value={formKind}
@@ -1608,7 +1599,7 @@ export function AgentDefinitionsSettings({
                 >
                   {t("settings.agentsKind")}
                 </Text>
-                <Tooltip
+                <InfoTooltip
                   content={
                     <Flex
                       direction="column"
@@ -1626,7 +1617,7 @@ export function AgentDefinitionsSettings({
                   >
                     <Info size={14} />
                   </button>
-                </Tooltip>
+                </InfoTooltip>
               </Flex>
               <LabeledSelect
                 value={newKind}

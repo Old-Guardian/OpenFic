@@ -20,7 +20,7 @@ import {
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import { LabeledSelect, Spinner } from "@/components";
+import { InfoTooltip, LabeledSelect, Spinner } from "@/components";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { toast } from "@/components/toast";
 import { getApiBaseUrl } from "@/lib/api-client";
@@ -51,6 +51,8 @@ import {
 import { AgentSettingsLockNotice } from "./agent-settings-lock-notice";
 import { ConnectionFormDialog } from "./connection-form-dialog";
 
+import "./connections-settings.css";
+
 interface ConnectionsSettingsProps {
   isAgentSettingsLocked: boolean;
   isAgentSettingsLockLoading: boolean;
@@ -61,6 +63,140 @@ interface OpenAICodexAuthAttempt {
   popup: Window | null;
   cancelRequested: boolean;
   cancelling: boolean;
+}
+
+interface ConnectionMetadataProps {
+  connection: ModelProvider;
+  disconnectedStatus: string;
+  disabledStatus: string;
+}
+
+function ConnectionMetadata({
+  connection,
+  disconnectedStatus,
+  disabledStatus,
+}: ConnectionMetadataProps) {
+  const { t } = useTranslation();
+  const metaRef = useRef<HTMLDivElement>(null);
+  const providerRef = useRef<HTMLSpanElement>(null);
+  const separatorRef = useRef<HTMLSpanElement>(null);
+  const urlRef = useRef<HTMLSpanElement>(null);
+  const hasCustomUrl = isCustomProviderType(connection.providerType) && !connection.catalogMatch;
+  const [isUrlHidden, setIsUrlHidden] = useState(false);
+
+  useEffect(() => {
+    if (!hasCustomUrl) {
+      setIsUrlHidden(false);
+      return;
+    }
+
+    const meta = metaRef.current;
+    const provider = providerRef.current;
+    const separator = separatorRef.current;
+    const url = urlRef.current;
+    if (!meta || !provider || !separator || !url) return;
+
+    const urlStyle = getComputedStyle(url);
+    const canvasContext = document.createElement("canvas").getContext("2d");
+    if (canvasContext) {
+      canvasContext.font = `${urlStyle.fontWeight} ${urlStyle.fontSize} ${urlStyle.fontFamily}`;
+    }
+    const fourCharacterWidth = canvasContext
+      ? canvasContext.measureText("0000").width
+      : Number.parseFloat(urlStyle.fontSize) * 2;
+
+    const updateUrlVisibility = () => {
+      const metaStyle = getComputedStyle(meta);
+      const gap = Number.parseFloat(metaStyle.columnGap || metaStyle.gap) || 0;
+      const availableUrlWidth =
+        meta.clientWidth - provider.offsetWidth - separator.offsetWidth - gap * 2;
+      setIsUrlHidden(availableUrlWidth < fourCharacterWidth);
+    };
+
+    const resizeObserver = new ResizeObserver(updateUrlVisibility);
+    resizeObserver.observe(meta);
+    updateUrlVisibility();
+    return () => resizeObserver.disconnect();
+  }, [connection, hasCustomUrl]);
+
+  return (
+    <Flex
+      ref={metaRef}
+      align="center"
+      gap="2"
+      className="connections-settings__item-meta"
+    >
+      <Text
+        ref={providerRef}
+        size="2"
+        color="gray"
+        className="connections-settings__item-meta-text connections-settings__item-meta-text--provider"
+      >
+        {connection.catalogMatch?.displayName || getProviderDisplayName(connection.providerType)}
+        {connection.providerType === "openai-codex" && connection.accountConnected === false && (
+          <Text
+            size="2"
+            color="orange"
+          >
+            {disconnectedStatus}
+          </Text>
+        )}
+        {connection.providerType === "openai-codex" &&
+          connection.accountConnected !== false &&
+          connection.openaiCodexAccessEnabled === false && (
+            <Text
+              size="2"
+              color="orange"
+            >
+              {disabledStatus}
+            </Text>
+          )}
+      </Text>
+      {connection.providerType === "google-vertex" && (
+        <>
+          <Text
+            size="2"
+            color="gray"
+          >
+            •
+          </Text>
+          <Badge
+            size="1"
+            color={connection.providerConfig?.auth_mode === "service_account" ? "green" : "blue"}
+            variant="soft"
+          >
+            {connection.providerConfig?.auth_mode === "service_account"
+              ? t("connections.authModeServiceAccount")
+              : t("connections.authModeAdc")}
+          </Badge>
+        </>
+      )}
+      {hasCustomUrl && (
+        <>
+          <Text
+            ref={separatorRef}
+            size="2"
+            color="gray"
+            className={`connections-settings__item-meta-separator${
+              isUrlHidden ? " connections-settings__item-meta-separator--hidden" : ""
+            }`}
+          >
+            •
+          </Text>
+          <Text
+            ref={urlRef}
+            size="2"
+            color="gray"
+            className={`connections-settings__item-meta-text connections-settings__item-meta-text--url${
+              isUrlHidden ? " connections-settings__item-meta-text--url-hidden" : ""
+            }`}
+          >
+            {connection.url}
+          </Text>
+        </>
+      )}
+    </Flex>
+  );
 }
 
 export function ConnectionsSettings({
@@ -520,15 +656,18 @@ export function ConnectionsSettings({
                 <Flex
                   align="center"
                   justify="between"
+                  className="connections-settings__item-row"
                   style={{ padding: "var(--space-4)" }}
                 >
                   <Flex
                     align="center"
                     gap="3"
+                    className="connections-settings__item-content"
                     style={{ flex: 1 }}
                   >
                     {/* 图标 */}
                     <Box
+                      className="connections-settings__item-icon"
                       style={{
                         width: 40,
                         height: 40,
@@ -556,6 +695,7 @@ export function ConnectionsSettings({
                     <Flex
                       direction="column"
                       gap="1"
+                      className="connections-settings__item-info"
                       style={{ flex: 1 }}
                     >
                       <Flex
@@ -565,6 +705,7 @@ export function ConnectionsSettings({
                         <Text
                           size="3"
                           weight="medium"
+                          className="connections-settings__item-title"
                         >
                           {connection.providerType === "openai-codex"
                             ? connection.name ||
@@ -581,82 +722,19 @@ export function ConnectionsSettings({
                               resolveProviderDisplayName(connection)}
                         </Text>
                       </Flex>
-                      <Flex
-                        align="center"
-                        gap="2"
-                      >
-                        <Text
-                          size="2"
-                          color="gray"
-                        >
-                          {connection.catalogMatch?.displayName ||
-                            getProviderDisplayName(connection.providerType)}
-                          {connection.providerType === "openai-codex" &&
-                            connection.accountConnected === false && (
-                              <Text
-                                size="2"
-                                color="orange"
-                              >
-                                {t("connections.openaiCodexDisconnectedStatus")}
-                              </Text>
-                            )}
-                          {connection.providerType === "openai-codex" &&
-                            connection.accountConnected !== false &&
-                            connection.openaiCodexAccessEnabled === false && (
-                              <Text
-                                size="2"
-                                color="orange"
-                              >
-                                {t("connections.openaiCodexDisabledStatus")}
-                              </Text>
-                            )}
-                        </Text>
-                        {connection.providerType === "google-vertex" && (
-                          <>
-                            <Text
-                              size="2"
-                              color="gray"
-                            >
-                              •
-                            </Text>
-                            <Badge
-                              size="1"
-                              color={
-                                connection.providerConfig?.auth_mode === "service_account"
-                                  ? "green"
-                                  : "blue"
-                              }
-                              variant="soft"
-                            >
-                              {connection.providerConfig?.auth_mode === "service_account"
-                                ? t("connections.authModeServiceAccount")
-                                : t("connections.authModeAdc")}
-                            </Badge>
-                          </>
-                        )}
-                        {isCustomProviderType(connection.providerType) &&
-                          !connection.catalogMatch && (
-                            <>
-                              <Text
-                                size="2"
-                                color="gray"
-                              >
-                                •
-                              </Text>
-                              <Text
-                                size="2"
-                                color="gray"
-                              >
-                                {connection.url}
-                              </Text>
-                            </>
-                          )}
-                      </Flex>
+                      <ConnectionMetadata
+                        connection={connection}
+                        disconnectedStatus={t("connections.openaiCodexDisconnectedStatus")}
+                        disabledStatus={t("connections.openaiCodexDisabledStatus")}
+                      />
                     </Flex>
                   </Flex>
 
                   {/* 操作按钮 */}
-                  <Flex gap="2">
+                  <Flex
+                    gap="2"
+                    className="connections-settings__item-actions"
+                  >
                     <Tooltip content={t("connections.editConnection")}>
                       <IconButton
                         variant="ghost"
@@ -869,7 +947,7 @@ export function ConnectionsSettings({
                         >
                           {t("connections.openaiCodexCallbackLabel")}
                         </Text>
-                        <Tooltip
+                        <InfoTooltip
                           content={
                             <Flex
                               direction="column"
@@ -890,7 +968,7 @@ export function ConnectionsSettings({
                           >
                             <Info size={14} />
                           </button>
-                        </Tooltip>
+                        </InfoTooltip>
                       </Flex>
                       <TextArea
                         id="openai-codex-callback-url"

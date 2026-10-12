@@ -1,10 +1,10 @@
-import { Box, Button, Flex, Switch, Text, Tooltip } from "@radix-ui/themes";
+import { Box, Button, Flex, Switch, Text } from "@radix-ui/themes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info } from "lucide-react";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Spinner, toast } from "@/components";
+import { InfoTooltip, Spinner, toast } from "@/components";
 
 import { fetchSettings, updateSettings } from "../lib/settings-api";
 import type { Settings, SettingsUpdateRequest } from "../lib/settings.types";
@@ -34,8 +34,12 @@ export function EditorSettings() {
       if (previousSettings) {
         queryClient.setQueryData<Settings>(["settings"], {
           ...previousSettings,
-          ...(patch.editor_auto_save !== undefined ? { editorAutoSave: patch.editor_auto_save } : {}),
-          ...(patch.editor_auto_indent !== undefined ? { editorAutoIndent: patch.editor_auto_indent } : {}),
+          ...(patch.editor_auto_save !== undefined
+            ? { editorAutoSave: patch.editor_auto_save }
+            : {}),
+          ...(patch.editor_auto_indent !== undefined
+            ? { editorAutoIndent: patch.editor_auto_indent }
+            : {}),
           ...(patch.editor_auto_convert_punctuation !== undefined
             ? { editorAutoConvertPunctuation: patch.editor_auto_convert_punctuation }
             : {}),
@@ -206,7 +210,7 @@ export function EditorSettings() {
               >
                 {t("settings.editorAutoIndent")}
               </Text>
-              <Tooltip content={t("settings.editorAutoIndentTooltip")}>
+              <InfoTooltip content={t("settings.editorAutoIndentTooltip")}>
                 <button
                   type="button"
                   className="advanced-settings-info-button"
@@ -214,7 +218,7 @@ export function EditorSettings() {
                 >
                   <Info size={14} />
                 </button>
-              </Tooltip>
+              </InfoTooltip>
             </Flex>
             <Text
               size="1"
@@ -251,7 +255,7 @@ export function EditorSettings() {
               >
                 {t("settings.editorAutoConvertPunctuation")}
               </Text>
-              <Tooltip content={t("settings.editorAutoConvertPunctuationTooltipSymbols")}>
+              <InfoTooltip content={t("settings.editorAutoConvertPunctuationTooltipSymbols")}>
                 <button
                   type="button"
                   className="advanced-settings-info-button"
@@ -259,7 +263,7 @@ export function EditorSettings() {
                 >
                   <Info size={14} />
                 </button>
-              </Tooltip>
+              </InfoTooltip>
             </Flex>
             <Text
               size="1"
@@ -296,7 +300,7 @@ export function EditorSettings() {
               >
                 {t("settings.editorAutoPairSymbols")}
               </Text>
-              <Tooltip content={t("settings.editorAutoPairSymbolsTooltipSymbols")}>
+              <InfoTooltip content={t("settings.editorAutoPairSymbolsTooltipSymbols")}>
                 <button
                   type="button"
                   className="advanced-settings-info-button"
@@ -304,7 +308,7 @@ export function EditorSettings() {
                 >
                   <Info size={14} />
                 </button>
-              </Tooltip>
+              </InfoTooltip>
             </Flex>
             <Text
               size="1"

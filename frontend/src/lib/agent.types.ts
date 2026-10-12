@@ -31,6 +31,8 @@ export interface ActiveSubagentState {
 }
 
 export interface SubagentSessionPayload {
+  currentError: AgentRunError | null;
+  currentRequestId: string | null;
   childRunId: string;
   childThreadId: string;
   parentSessionId: string;
@@ -326,10 +328,24 @@ export interface AgentForkResponse {
 }
 
 export interface AgentSessionStateResponse {
+  currentError: AgentRunError | null;
   sessionId: string;
   state: Record<string, unknown>;
   isRunning: boolean;
+  canContinue: boolean;
   interrupts: Record<string, unknown>[];
+}
+
+export interface AgentRunError {
+  type: string;
+  reason: string;
+  roundId: string;
+}
+
+export interface AgentContinueResponse {
+  success: boolean;
+  session_id: string;
+  message: string;
 }
 
 export interface AgentSendMessageRequest {

@@ -1321,7 +1321,7 @@
     "openaiCodexWaiting": "Waiting for browser authorization. If the callback cannot complete automatically, enter the callback URL manually.",
     "noConnections": "No providers yet",
     "name": "Name",
-    "namePlaceholder": "Enter name (optional, defaults to URL)",
+    "namePlaceholder": "optional, defaults to URL",
     "url": "Service URL",
     "urlPlaceholder": "Enter service URL",
     "urlRequired": "Please enter service URL",
@@ -1694,6 +1694,7 @@
     "openLink": "Open link"
   },
   "select": {
+    "title": "Select",
     "searchPlaceholder": "Search...",
     "noMatchingOptions": "No matching options"
   },
@@ -2202,6 +2203,12 @@
     "subagentSessionReconnectFailed": "Failed to reconnect the subagent session",
     "subagentSessionSubscribeFailed": "Failed to subscribe to the subagent session",
     "startFailed": "Failed to start Agent",
+    "continueSession": "Continue",
+    "continueFailed": "Failed to continue the session",
+    "stop": "Stop",
+    "stopping": "Stopping...",
+    "sendMessage": "Send message",
+    "cancelSessionFailed": "Failed to stop the session",
     "sessionNotFound": "Session not found",
     "sendMessageFailed": "Failed to send message",
     "compactionRunningToast": "Cannot compact while the Agent is running",

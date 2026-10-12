@@ -1,5 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
+import zhTranslations from "../src/i18n/locales/zh-CN.json" with { type: "json" };
+
 const pageErrors = new WeakMap<Page, string[]>();
 test.beforeEach(async ({ page }) => {
   const errors: string[] = [];
@@ -156,4 +158,65 @@ test("switching sessions discards a pending empty-page response", async ({ page 
   await expect(page.getByTestId("pagination-state")).toContainText('"sessionId":"B"');
   await expect(page.getByTestId("pagination-state")).toContainText('"messagesHasMore":false');
   expect(requests.filter((url) => url.includes("/A?"))).toHaveLength(1);
+});
+
+test("streaming pauses follow on upward scroll and resumes after returning to bottom", async ({
+  page,
+}) => {
+  await openFixture(page, "streaming");
+  const container = page.locator(".ai-sidebar-messages");
+  await expect(page.getByTestId("scroll-state")).toHaveText("true");
+  await expect
+    .poll(() =>
+      container.evaluate(
+        (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+      ),
+    )
+    .toBeLessThan(5);
+  await container.hover();
+  await page.mouse.wheel(0, -500);
+  await expect(page.getByTestId("scroll-state")).toHaveText("false");
+  const previousTop = await container.evaluate((element) => element.scrollTop);
+  await page.getByRole("button", { name: "Append output" }).click();
+  await expect(container.getByText("Streaming paragraph", { exact: true })).toHaveCount(30);
+  expect(await container.evaluate((element) => element.scrollTop)).toBeCloseTo(previousTop, 0);
+  await page.getByRole("button", { name: "Return to bottom" }).click();
+  await expect(page.getByTestId("scroll-state")).toHaveText("true");
+  await page.getByRole("button", { name: "Append output" }).click();
+  await expect(container.getByText("Streaming paragraph", { exact: true })).toHaveCount(60);
+  await expect
+    .poll(() =>
+      container.evaluate(
+        (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+      ),
+    )
+    .toBeLessThan(5);
+});
+
+test.describe("mobile selection", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+  test("select sheets keep values and distinguish both Vertex providers", async ({ page }) => {
+    await openFixture(page, "mobile-selection");
+    await page.getByRole("button", { name: "Mobile choice", exact: true }).tap();
+    const choice = page.getByRole("dialog", { name: "Mobile choice" });
+    await expect(choice).toBeVisible();
+    await choice.getByText("Beta", { exact: true }).click();
+    await expect(choice).toBeHidden();
+    await expect(page.getByTestId("selection-state")).toContainText('"choice":"beta"');
+    await page.getByRole("textbox", { name: "Choose provider" }).tap();
+    const providers = page.getByRole("dialog");
+    await expect(
+      providers.getByText(zhTranslations.connections.vertexGeminiBadge, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      providers.getByText(zhTranslations.connections.vertexAnthropicBadge, { exact: true }),
+    ).toBeVisible();
+    await providers
+      .getByText(zhTranslations.connections.vertexAnthropicBadge, { exact: true })
+      .tap();
+    await expect(providers).toBeHidden();
+    await expect(page.getByTestId("selection-state")).toContainText(
+      '"provider":"google-vertex-anthropic"',
+    );
+  });
 });

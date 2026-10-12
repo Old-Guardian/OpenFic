@@ -743,6 +743,9 @@ export function ConnectionFormDialog({
             event.preventDefault();
           }
         }}
+        onOpenAutoFocus={(event) => {
+          if (window.innerWidth < 768) event.preventDefault();
+        }}
       >
         <Dialog.Title>
           {isEditing ? t("connections.editConnection") : t("connections.createConnection")}
