@@ -391,7 +391,7 @@ async def test_validate_anthropic_compatible_provider_discovers_models(
 async def test_validate_openai_responses_compatible_provider_discovers_models(
     client: AsyncClient,
 ):
-    route = respx.get("https://gateway.example/v1/models").mock(
+    route = respx.get("https://gateway.example/models").mock(
         return_value=httpx.Response(
             200,
             json={"data": [{"id": "responses-model", "name": "Responses Model"}]},

@@ -19,6 +19,7 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
 import { ProviderIdSelect, Spinner } from "@/components";
+import { showErrorToast } from "@/components/toast";
 import type { ModelProvider, ModelProviderCatalogProvider } from "@/lib/model.types";
 
 import { fetchModelProviderCatalogModels, validateProvider } from "../lib/model-api";
@@ -258,7 +259,12 @@ export function ConnectionFormDialog({
 
   // 当非 Vertex 提供商类型改变时，自动设置固定 URL
   useEffect(() => {
-    if (!providerType || isVertex || isOAuthProvider || requiresProviderUrl(providerType, catalogProviders)) {
+    if (
+      !providerType ||
+      isVertex ||
+      isOAuthProvider ||
+      requiresProviderUrl(providerType, catalogProviders)
+    ) {
       return;
     }
 
@@ -277,7 +283,16 @@ export function ConnectionFormDialog({
         }
       }
     }
-  }, [providerType, isVertex, isOAuthProvider, setValue, isEditing, url, connection, catalogProviders]);
+  }, [
+    providerType,
+    isVertex,
+    isOAuthProvider,
+    setValue,
+    isEditing,
+    url,
+    connection,
+    catalogProviders,
+  ]);
 
   // 当切换到 Vertex 时，补充默认建议区域及测试模型
   useEffect(() => {
@@ -491,12 +506,14 @@ export function ConnectionFormDialog({
         validateUrl = fixedUrl;
       } else {
         setValidationStatus("error");
+        showErrorToast(t("connections.validateFailed"), t("connections.urlRequired"));
         return;
       }
     }
 
     if (!isEditing && !formData.apiKey) {
       setValidationStatus("error");
+      showErrorToast(t("connections.validateFailed"), t("connections.apiKeyRequired"));
       return;
     }
 
@@ -518,9 +535,11 @@ export function ConnectionFormDialog({
         setValidationStatus("success");
       } else {
         setValidationStatus("error");
+        showErrorToast(t("connections.validateFailed"), result.message);
       }
-    } catch {
+    } catch (error) {
       setValidationStatus("error");
+      showErrorToast(t("connections.validateFailed"), error);
     }
   }, [catalogProviders, connection, getValues, isEditing, t]);
 
@@ -719,6 +738,11 @@ export function ConnectionFormDialog({
       <Dialog.Content
         maxWidth="520px"
         className="settings-background-panel"
+        onInteractOutside={(event) => {
+          if (event.target instanceof Element && event.target.closest("[data-sonner-toaster]")) {
+            event.preventDefault();
+          }
+        }}
       >
         <Dialog.Title>
           {isEditing ? t("connections.editConnection") : t("connections.createConnection")}

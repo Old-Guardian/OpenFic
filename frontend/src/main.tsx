@@ -14,12 +14,6 @@ import {
 } from "react";
 import { ErrorBoundary } from "react-error-boundary";
 import { createBrowserRouter, RouterProvider } from "react-router";
-import {
-  EditorLeaveConfirmDialog,
-  useDesktopCloseHandler,
-  useEditorRouteBlocker,
-  useGlobalBeforeUnload,
-} from "./features/editor-session";
 
 import App from "./App.tsx";
 import { AppCrashFallback, GlobalLoading, toast } from "./components";
@@ -27,6 +21,12 @@ import { Toaster } from "./components/toaster";
 import { AppLayout } from "./features/app-shell";
 import { AuthPage } from "./features/auth";
 import { CharactersPage } from "./features/characters";
+import {
+  EditorLeaveConfirmDialog,
+  useDesktopCloseHandler,
+  useEditorRouteBlocker,
+  useGlobalBeforeUnload,
+} from "./features/editor-session";
 import { PromptChainsPage } from "./features/prompt-chains";
 import { fetchSettings, updateSettings } from "./features/settings/lib/settings-api";
 import type { Settings } from "./features/settings/lib/settings.types";
@@ -604,8 +604,8 @@ function Root() {
                 />
               </ErrorBoundary>
             )}
+            {isReady && !requiresAuthentication ? <Toaster appearance={appearance} /> : null}
           </Theme>
-          {isReady && !requiresAuthentication ? <Toaster appearance={appearance} /> : null}
           <EditorLeaveConfirmDialog />
         </>
       </QueryClientProvider>
