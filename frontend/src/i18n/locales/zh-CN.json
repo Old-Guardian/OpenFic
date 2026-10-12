@@ -505,7 +505,6 @@
       "deleteAllTasksResultWithRunning": "已删除 {{deleted}} 个任务，跳过 {{skipped}} 个运行中的任务",
       "batchDeleteFailed": "批量删除任务失败：{{error}}",
       "agentTaskNotSupported": "Agent任务暂不支持重新打开，仅可查看历史记录",
-      "agentTaskLoaded": "Agent任务已加载",
       "agentSessionNotFound": "Agent会话ID不存在，无法恢复任务",
       "currentTask": "当前对话",
       "editMessage": "编辑消息",
@@ -2086,6 +2085,9 @@
     "totalCost": "累计费用：$ {{cost}}",
     "contextUsage": "上下文占用",
     "loadingTask": "加载任务中...",
+    "loadingEarlierMessages": "正在加载更早的消息...",
+    "loadEarlierMessagesFailed": "加载更早的消息失败。",
+    "retryEarlierMessages": "重试",
     "scrollToBottom": "回到底部",
     "messageNavigation": {
       "label": "消息导航",
